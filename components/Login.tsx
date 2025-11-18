@@ -118,7 +118,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onRegisterClick }) => {
           
           <div className="pb-6 pt-0 text-center px-4">
             <p className="text-purple-300/70 text-[10px] font-medium">
-              &copy; 2023 Recout Systems. Todos os direitos reservados.
+              &copy; 2025 Recout Systems. Todos os direitos reservados.
             </p>
           </div>
         </div>
