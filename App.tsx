@@ -105,10 +105,18 @@ export default function App() {
 
     window.addEventListener('focus', onWindowFocus);
 
+    const handleBeforeUnload = () => {
+      const state = systemStore.getPersistedState();
+      const blob = new Blob([JSON.stringify({ state })], { type: 'application/json' });
+      navigator.sendBeacon('/api/state', blob);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       disposed = true;
       window.clearInterval(timer);
       window.removeEventListener('focus', onWindowFocus);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, []);
 

@@ -285,6 +285,12 @@ class SystemStore {
         updatedAt: this.updatedAt,
       };
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+      // Sync imediato com o banco no Vercel (fire-and-forget)
+      void fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: data }),
+      }).catch(() => { /* offline — localStorage já salvo */ });
     } catch (e) {
       console.error("Erro ao salvar dados:", e);
     }

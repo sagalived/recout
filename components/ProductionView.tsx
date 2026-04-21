@@ -501,6 +501,19 @@ export const ProductionView: React.FC = () => {
 
   const currentUser = systemStore.getCurrentUser();
   const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+  const userSector = currentUser?.sector || '';
+  const isTriagem = userSector.toLowerCase() === 'triagem';
+  // Usuários não-admin fora da Triagem só enxergam peças do seu setor em produção ativa
+  const canOpenCatalog = isAdmin || isTriagem;
+
+  const handleOpenPartSearch = () => {
+    if (isRunning) return;
+    if (canOpenCatalog) {
+      setShowPartModal(true);
+    } else {
+      handleSearchProduction();
+    }
+  };
 
   return (
     <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500 relative pb-20">
@@ -565,13 +578,13 @@ export const ProductionView: React.FC = () => {
                             type="text" 
                             value={partName}
                             readOnly
-                            onClick={() => !isRunning && setShowPartModal(true)}
+                            onClick={handleOpenPartSearch}
                             className={`w-full border border-[#570a8a] rounded-sm p-3 text-white focus:outline-none shadow-inner placeholder-purple-300/50 ${isRunning ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'}`}
-                            placeholder="Selecione a peça..." 
+                            placeholder={canOpenCatalog ? "Selecione a peça..." : "Buscar peça no seu setor..."} 
                             style={{ backgroundColor: '#3b0764' }} 
                         />
                         <button 
-                            onClick={() => setShowPartModal(true)}
+                            onClick={handleOpenPartSearch}
                             disabled={isRunning}
                             className={`bg-gray-600 hover:bg-gray-500 text-white text-xs px-4 py-1 rounded-sm transition-colors shadow-md font-medium ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
@@ -828,7 +841,7 @@ export const ProductionView: React.FC = () => {
             <div className="flex items-center justify-between p-4 border-b border-[#570a8a]">
               <h3 className="text-[#FFD700] text-lg font-bold flex items-center gap-2">
                 <Search className="w-5 h-5" />
-                Peças em Produção
+                {isAdmin ? 'Peças em Produção' : `Peças no setor: ${userSector}`}
               </h3>
               <button
                 onClick={() => setShowProcessModal(false)}
@@ -872,7 +885,7 @@ export const ProductionView: React.FC = () => {
               >
                 Fechar
               </button>
-              {isAdmin && (
+              {(isAdmin || isTriagem) && (
                 <button
                   onClick={handleNewProductionFromSearch}
                   className="px-4 py-2 rounded bg-[#FFD700] hover:bg-[#e6c200] text-[#2e0249] font-bold transition-colors flex items-center gap-2"
