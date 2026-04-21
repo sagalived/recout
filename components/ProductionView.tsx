@@ -1,6 +1,9 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle, Upload, ImageIcon, Film, Cuboid, ChevronDown, ChevronRight } from 'lucide-react';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { systemStore, Product, ProductionEntry, ProductionSession, PartMediaAsset } from '../services/storage';
 
 export const ProductionView: React.FC = () => {
@@ -31,11 +34,15 @@ export const ProductionView: React.FC = () => {
   const [showPartModal, setShowPartModal] = useState(false);
   const [showProcessModal, setShowProcessModal] = useState(false);
   const [showProgressionModal, setShowProgressionModal] = useState(false);
+  const [showStlViewerModal, setShowStlViewerModal] = useState(false);
+  const [selectedStlAsset, setSelectedStlAsset] = useState<PartMediaAsset | null>(null);
+  const [stlViewerError, setStlViewerError] = useState('');
   const [activeProductions, setActiveProductions] = useState<ProductionEntry[]>([]);
   const [loadedProductionId, setLoadedProductionId] = useState('');
   const [mediaAssets, setMediaAssets] = useState<PartMediaAsset[]>([]);
   const [mediaFilter, setMediaFilter] = useState<'all' | 'current'>('all');
   const [collapsedSectors, setCollapsedSectors] = useState<Record<string, boolean>>({});
+  const stlViewerContainerRef = useRef<HTMLDivElement | null>(null);
 
   const filteredMediaAssets = useMemo(() => {
     if (mediaFilter === 'current') {
@@ -88,6 +95,127 @@ export const ProductionView: React.FC = () => {
     if (currentIndex <= 0) return '';
     return sectors[currentIndex - 1];
   };
+
+  const isStlAsset = (asset: PartMediaAsset) => {
+    const fileName = asset.fileName.toLowerCase();
+    const fileType = asset.fileType.toLowerCase();
+    return fileName.endsWith('.stl') || fileType.includes('stl');
+  };
+
+  const handleOpenStlViewer = (asset: PartMediaAsset) => {
+    setSelectedStlAsset(asset);
+    setStlViewerError('');
+    setShowStlViewerModal(true);
+  };
+
+  useEffect(() => {
+    if (!showStlViewerModal || !selectedStlAsset || !stlViewerContainerRef.current) return;
+
+    const container = stlViewerContainerRef.current;
+    const width = Math.max(container.clientWidth, 320);
+    const height = Math.max(container.clientHeight, 320);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#0f172a');
+
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 5000);
+    camera.position.set(0, -80, 120);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(width, height);
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    directionalLight.position.set(60, 80, 80);
+    scene.add(ambientLight);
+    scene.add(directionalLight);
+
+    const grid = new THREE.GridHelper(200, 20, 0x334155, 0x1e293b);
+    grid.rotation.x = Math.PI / 2;
+    scene.add(grid);
+
+    let animationFrame = 0;
+    let mesh: THREE.Mesh | null = null;
+
+    const animate = () => {
+      animationFrame = window.requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+
+    const handleResize = () => {
+      const newWidth = Math.max(container.clientWidth, 320);
+      const newHeight = Math.max(container.clientHeight, 320);
+      camera.aspect = newWidth / newHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(newWidth, newHeight);
+    };
+
+    const loadStl = async () => {
+      try {
+        const response = await fetch(selectedStlAsset.dataUrl);
+        const buffer = await response.arrayBuffer();
+        const loader = new STLLoader();
+        const geometry = loader.parse(buffer);
+        geometry.computeVertexNormals();
+
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x38bdf8,
+          metalness: 0.15,
+          roughness: 0.55,
+        });
+
+        mesh = new THREE.Mesh(geometry, material);
+        mesh.rotation.x = -Math.PI / 2;
+        scene.add(mesh);
+
+        geometry.computeBoundingBox();
+        const box = new THREE.Box3().setFromObject(mesh);
+        const center = box.getCenter(new THREE.Vector3());
+        mesh.position.sub(center);
+
+        const size = box.getSize(new THREE.Vector3()).length() || 1;
+        const distance = Math.max(80, size * 1.3);
+        camera.position.set(distance * 0.8, -distance * 0.6, distance * 0.8);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        animate();
+      } catch (error) {
+        console.error('Falha ao abrir STL:', error);
+        setStlViewerError('Nao foi possivel carregar o arquivo STL para visualizacao.');
+      }
+    };
+
+    void loadStl();
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      controls.dispose();
+      if (mesh) {
+        mesh.geometry.dispose();
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach(m => m.dispose());
+        } else {
+          mesh.material.dispose();
+        }
+      }
+      renderer.dispose();
+      if (renderer.domElement.parentElement === container) {
+        container.removeChild(renderer.domElement);
+      }
+    };
+  }, [showStlViewerModal, selectedStlAsset]);
 
   const refreshActiveProductions = (viewer?: { name?: string; sector?: string; isAdmin?: boolean }) => {
     const allActive = systemStore.getActiveProductions();
@@ -818,13 +946,24 @@ export const ProductionView: React.FC = () => {
                         )}
 
                         {isModel && (
-                          <a
-                            href={asset.dataUrl}
-                            download={asset.fileName}
-                            className="text-xs text-cyan-300 underline"
-                          >
-                            Baixar arquivo 3D
-                          </a>
+                          <div className="flex items-center gap-3">
+                            {isStlAsset(asset) && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenStlViewer(asset)}
+                                className="text-xs px-2 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+                              >
+                                Visualizar STL
+                              </button>
+                            )}
+                            <a
+                              href={asset.dataUrl}
+                              download={asset.fileName}
+                              className="text-xs text-cyan-300 underline"
+                            >
+                              Baixar arquivo 3D
+                            </a>
+                          </div>
                         )}
                       </div>
                     );
@@ -949,9 +1088,20 @@ export const ProductionView: React.FC = () => {
                               {isImage && <img src={asset.dataUrl} alt={asset.fileName} className="w-full max-h-64 object-contain rounded bg-black/20" />}
                               {isVideo && <video src={asset.dataUrl} controls className="w-full rounded" />}
                               {isModel && (
-                                <a href={asset.dataUrl} download={asset.fileName} className="text-sm text-cyan-300 underline">
-                                  Baixar arquivo 3D
-                                </a>
+                                <div className="flex items-center gap-3">
+                                  {isStlAsset(asset) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenStlViewer(asset)}
+                                      className="text-xs px-2 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+                                    >
+                                      Visualizar STL
+                                    </button>
+                                  )}
+                                  <a href={asset.dataUrl} download={asset.fileName} className="text-sm text-cyan-300 underline">
+                                    Baixar arquivo 3D
+                                  </a>
+                                </div>
                               )}
                             </div>
                           );
@@ -970,6 +1120,56 @@ export const ProductionView: React.FC = () => {
               >
                 Fechar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStlViewerModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+          <div className="bg-[#2e0249] border-2 border-cyan-400 rounded-lg shadow-2xl max-w-5xl w-full animate-in zoom-in duration-300 overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-[#570a8a]">
+              <div>
+                <h3 className="text-cyan-300 text-lg font-bold">Visualizador STL (Exocad)</h3>
+                <p className="text-xs text-cyan-100 mt-1">{selectedStlAsset?.fileName}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStlViewerModal(false);
+                  setSelectedStlAsset(null);
+                  setStlViewerError('');
+                }}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-[#1b002b]">
+              <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs text-cyan-200">Use o mouse para girar, zoom e mover o modelo.</p>
+                {selectedStlAsset && (
+                  <a
+                    href={selectedStlAsset.dataUrl}
+                    download={selectedStlAsset.fileName}
+                    className="text-xs px-3 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+                  >
+                    Baixar STL
+                  </a>
+                )}
+              </div>
+
+              {stlViewerError ? (
+                <div className="h-[60vh] min-h-[360px] rounded border border-red-500/50 bg-red-950/20 flex items-center justify-center px-4 text-center text-red-300 text-sm">
+                  {stlViewerError}
+                </div>
+              ) : (
+                <div
+                  ref={stlViewerContainerRef}
+                  className="h-[60vh] min-h-[360px] rounded border border-[#570a8a] bg-slate-900"
+                />
+              )}
             </div>
           </div>
         </div>
