@@ -6,6 +6,7 @@ export interface Product {
   client: string;
   sector: string;
   deliveryDeadline?: string;
+  completedAt?: number;
 }
 
 export interface Employee {
@@ -212,6 +213,38 @@ class SystemStore {
       if (normalizedCurrentSectors !== normalizedDefaultSectors || this.sectors.length !== DEFAULT_SECTORS.length) {
         this.sectors = DEFAULT_SECTORS.map(s => ({ ...s }));
         shouldPersistMigration = true;
+      }
+
+      // Migration: products linked to finished processes should be flagged as completed.
+      const finishedByCode = new Map<string, { completedAt: number; sector: string }>();
+      this.production
+        .filter(entry => entry.status === 'finished')
+        .forEach(entry => {
+          const fromHistory = entry.sectorHistory && entry.sectorHistory.length > 0
+            ? entry.sectorHistory[entry.sectorHistory.length - 1].endedAt
+            : Date.now();
+          finishedByCode.set(entry.partCode, {
+            completedAt: fromHistory,
+            sector: entry.currentSector,
+          });
+        });
+
+      if (finishedByCode.size > 0) {
+        let changed = false;
+        this.products = this.products.map(product => {
+          const finished = finishedByCode.get(product.code);
+          if (!finished) return product;
+          if (product.completedAt) return product;
+          changed = true;
+          return {
+            ...product,
+            completedAt: finished.completedAt,
+            sector: finished.sector,
+          };
+        });
+        if (changed) {
+          shouldPersistMigration = true;
+        }
       }
 
       // Seed data for quick manual testing when records are below target volume.
@@ -568,6 +601,14 @@ class SystemStore {
   startProduction(entry: ProductionEntry) {
     this.loadFromStorage();
     this.production.push(entry);
+    this.products = this.products.map(product => {
+      if (product.code !== entry.partCode) return product;
+      return {
+        ...product,
+        sector: entry.currentSector,
+        completedAt: undefined,
+      };
+    });
     this.saveToStorage();
   }
 
@@ -594,6 +635,13 @@ class SystemStore {
       p.employeeName = handler;
       p.currentSector = sector;
       p.sectorStartTime = now;
+      this.products = this.products.map(product => {
+        if (product.code !== p.partCode) return product;
+        return {
+          ...product,
+          sector,
+        };
+      });
       this.saveToStorage();
     }
   }
@@ -620,6 +668,14 @@ class SystemStore {
       });
       p.employeeName = handler;
       p.status = 'finished';
+      this.products = this.products.map(product => {
+        if (product.code !== p.partCode) return product;
+        return {
+          ...product,
+          sector: p.currentSector,
+          completedAt: now,
+        };
+      });
       this.saveToStorage();
     }
   }
@@ -700,8 +756,13 @@ class SystemStore {
   getSectorStats() {
     return this.sectors.map(sectorEntry => {
         const sector = sectorEntry.name;
-        const count = this.products.filter(p => p.sector === sector).length 
-                    + this.production.filter(p => p.currentSector === sector && p.status === 'working').length;
+        const stockCodes = this.products
+          .filter(p => p.sector === sector && !p.completedAt)
+          .map(p => p.code);
+        const activeCodes = this.production
+          .filter(p => p.currentSector === sector && (p.status === 'working' || p.status === 'paused'))
+          .map(p => p.partCode);
+        const count = new Set([...stockCodes, ...activeCodes]).size;
         
         let capacity = 100;
         let color = 'bg-blue-500';

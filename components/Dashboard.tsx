@@ -20,6 +20,8 @@ interface LiveProductionUI {
   status: 'working' | 'paused' | 'finished';
 }
 
+type HistoryPeriod = 'today' | 'week' | 'month';
+
 export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
   const [liveProduction, setLiveProduction] = useState<LiveProductionUI[]>([]);
     const [productionEntries, setProductionEntries] = useState<ProductionEntry[]>([]);
@@ -48,6 +50,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     const [showEmployeeHistoryModal, setShowEmployeeHistoryModal] = useState(false);
     const [employeeHistoryTitle, setEmployeeHistoryTitle] = useState('');
     const [employeeHistoryRows, setEmployeeHistoryRows] = useState<Array<{processId: string; partCode: string; partName: string; sector: string; durationSeconds: number; endedAt: number;}>>([]);
+    const [historyPeriod, setHistoryPeriod] = useState<HistoryPeriod>('month');
 
   // Update Loop
     useEffect(() => {
@@ -201,7 +204,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
 
         const activePartCodes = new Set(activeRows.map(row => row.partCode));
         const catalogRows = systemStore.getProducts()
-            .filter(product => product.sector === sectorName && !activePartCodes.has(product.code))
+            .filter(product => product.sector === sectorName && !product.completedAt && !activePartCodes.has(product.code))
             .map(product => {
                 const deadlineTs = getDeadlineTimestamp(product);
                 const isOverdue = deadlineTs ? Date.now() > deadlineTs : false;
@@ -244,6 +247,44 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             .filter(row => Boolean(row.deadlineTs) && Date.now() > Number(row.deadlineTs));
     };
 
+    const getStockRows = () => {
+        return systemStore.getProducts()
+            .filter(product => !product.completedAt)
+            .sort((a, b) => b.id - a.id)
+            .map(product => ({
+                code: product.code,
+                name: product.name,
+                client: product.client,
+                sector: product.sector,
+            }));
+    };
+
+    const getFinishedRows = () => {
+        const finished = productionEntries
+            .filter(entry => entry.status === 'finished')
+            .sort((a, b) => b.startTime - a.startTime);
+
+        const uniqueByProcess = new Map<string, ProductionEntry>();
+        finished.forEach(entry => {
+            if (!uniqueByProcess.has(entry.id)) {
+                uniqueByProcess.set(entry.id, entry);
+            }
+        });
+
+        return Array.from(uniqueByProcess.values()).map(entry => {
+            const product = getProductByCode(entry.partCode);
+            const completedAt = product?.completedAt || (entry.sectorHistory && entry.sectorHistory.length > 0 ? entry.sectorHistory[entry.sectorHistory.length - 1].endedAt : null);
+
+            return {
+                processId: entry.id,
+                code: entry.partCode,
+                name: entry.partName,
+                client: product?.client || 'Nao encontrado',
+                completedAt,
+            };
+        });
+    };
+
     const getSectorTimesWithCurrent = (entry: ProductionEntry): Record<string, number> => {
         const merged = { ...(entry.sectorTimes || {}) };
         if (entry.status === 'working') {
@@ -261,6 +302,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
 
     const formatDateTime = (timestamp: number) => {
         return new Date(timestamp).toLocaleString('pt-BR');
+    };
+
+    const getPeriodStart = (period: HistoryPeriod) => {
+        const now = new Date();
+        if (period === 'today') {
+            const start = new Date(now);
+            start.setHours(0, 0, 0, 0);
+            return start.getTime();
+        }
+        if (period === 'week') {
+            const start = new Date(now);
+            start.setDate(now.getDate() - 6);
+            start.setHours(0, 0, 0, 0);
+            return start.getTime();
+        }
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        return start.getTime();
     };
 
     const buildProcessTimeline = (entry: ProductionEntry) => {
@@ -287,6 +345,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     const selectedProcess = selectedProcessId ? productionEntries.find(p => p.id === selectedProcessId) || null : null;
     const selectedSectorRows = selectedSectorName ? getSectorRows(selectedSectorName) : [];
     const overdueRows = getOverdueRows();
+    const stockRows = getStockRows();
+    const finishedRows = getFinishedRows().filter(row => {
+        if (!row.completedAt) return false;
+        return row.completedAt >= getPeriodStart(historyPeriod);
+    });
     const currentUser = systemStore.getCurrentUser();
     const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
 
@@ -604,6 +667,85 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                 <div className="mt-10 border-t border-[#570a8a] pt-6">
                     <h4 className="text-sm font-bold text-white mb-4">Eficiência Média (Semana)</h4>
                     <p className="text-xs text-gray-400">Sem dados suficientes para calcular eficiência.</p>
+                </div>
+            </div>
+
+            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] p-5">
+                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    Histórico de Produção
+                </h3>
+
+                <div className="mb-4 flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setHistoryPeriod('today')}
+                        className={`text-xs px-3 py-1 rounded border font-bold transition-colors ${historyPeriod === 'today' ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700]' : 'bg-[#2e0249] text-purple-200 border-[#570a8a] hover:bg-[#3c0360]'}`}
+                    >
+                        Hoje
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setHistoryPeriod('week')}
+                        className={`text-xs px-3 py-1 rounded border font-bold transition-colors ${historyPeriod === 'week' ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700]' : 'bg-[#2e0249] text-purple-200 border-[#570a8a] hover:bg-[#3c0360]'}`}
+                    >
+                        Semana
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setHistoryPeriod('month')}
+                        className={`text-xs px-3 py-1 rounded border font-bold transition-colors ${historyPeriod === 'month' ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700]' : 'bg-[#2e0249] text-purple-200 border-[#570a8a] hover:bg-[#3c0360]'}`}
+                    >
+                        Mês
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="bg-[#2e0249] border border-[#570a8a] rounded-md p-3 text-center">
+                        <p className="text-[10px] uppercase text-purple-300 font-bold">Em estoque</p>
+                        <p className="text-xl font-bold text-cyan-300">{stockRows.length}</p>
+                    </div>
+                    <div className="bg-[#2e0249] border border-[#570a8a] rounded-md p-3 text-center">
+                        <p className="text-[10px] uppercase text-purple-300 font-bold">Finalizadas no período</p>
+                        <p className="text-xl font-bold text-emerald-300">{finishedRows.length}</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <p className="text-xs uppercase font-bold text-cyan-300 mb-2">Peças em estoque</p>
+                        <div className="max-h-40 overflow-y-auto space-y-2 pr-1">
+                            {stockRows.length === 0 ? (
+                                <p className="text-xs text-gray-400">Nenhuma peça em estoque.</p>
+                            ) : (
+                                stockRows.slice(0, 8).map(row => (
+                                    <div key={`stock-${row.code}`} className="bg-[#2e0249] border border-[#570a8a] rounded p-2">
+                                        <p className="text-sm text-white font-semibold">{row.name}</p>
+                                        <p className="text-[11px] text-gray-300">ID: {row.code} | Setor: {row.sector}</p>
+                                        <p className="text-[11px] text-purple-300">Cliente: {row.client}</p>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    <div>
+                        <p className="text-xs uppercase font-bold text-emerald-300 mb-2">Peças já feitas</p>
+                        <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                            {finishedRows.length === 0 ? (
+                                <p className="text-xs text-gray-400">Nenhuma peça finalizada ainda.</p>
+                            ) : (
+                                finishedRows.slice(0, 8).map(row => (
+                                    <div key={`done-${row.processId}`} className="bg-emerald-950/30 border border-emerald-700/60 rounded p-2">
+                                        <p className="text-sm text-white font-semibold">{row.name}</p>
+                                        <p className="text-[11px] text-emerald-200">Processo: {row.processId} | ID: {row.code}</p>
+                                        <p className="text-[11px] text-emerald-300">Cliente: {row.client}</p>
+                                        <p className="text-[11px] text-emerald-400">Finalizada: {row.completedAt ? formatDateTime(row.completedAt) : 'Nao informado'}</p>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

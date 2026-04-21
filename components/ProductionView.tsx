@@ -133,7 +133,7 @@ export const ProductionView: React.FC = () => {
 
   // Initialization & Persistence Restoration
   useEffect(() => {
-    const products = systemStore.getProducts();
+    const products = systemStore.getProducts().filter(p => !p.completedAt);
     setRegisteredParts(products);
 
     // Load Sectors Dynamically
@@ -508,6 +508,7 @@ export const ProductionView: React.FC = () => {
 
   const handleOpenPartSearch = () => {
     if (isRunning) return;
+    setRegisteredParts(systemStore.getProducts().filter(p => !p.completedAt));
     if (canOpenCatalog) {
       setShowPartModal(true);
     } else {
