@@ -79,6 +79,8 @@ export interface PartMediaAsset {
   fileName: string;
   fileType: string;
   dataUrl: string;
+  contentFormat?: 'dataUrl' | 'text';
+  textContent?: string;
   uploadedAt: number;
 }
 

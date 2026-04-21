@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle, Upload, ImageIcon, Film, Cuboid, ChevronDown, ChevronRight } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { systemStore, Product, ProductionEntry, ProductionSession, PartMediaAsset } from '../services/storage';
 
@@ -34,15 +35,15 @@ export const ProductionView: React.FC = () => {
   const [showPartModal, setShowPartModal] = useState(false);
   const [showProcessModal, setShowProcessModal] = useState(false);
   const [showProgressionModal, setShowProgressionModal] = useState(false);
-  const [showStlViewerModal, setShowStlViewerModal] = useState(false);
-  const [selectedStlAsset, setSelectedStlAsset] = useState<PartMediaAsset | null>(null);
-  const [stlViewerError, setStlViewerError] = useState('');
+  const [showModelViewerModal, setShowModelViewerModal] = useState(false);
+  const [selectedModelAsset, setSelectedModelAsset] = useState<PartMediaAsset | null>(null);
+  const [modelViewerError, setModelViewerError] = useState('');
   const [activeProductions, setActiveProductions] = useState<ProductionEntry[]>([]);
   const [loadedProductionId, setLoadedProductionId] = useState('');
   const [mediaAssets, setMediaAssets] = useState<PartMediaAsset[]>([]);
   const [mediaFilter, setMediaFilter] = useState<'all' | 'current'>('all');
   const [collapsedSectors, setCollapsedSectors] = useState<Record<string, boolean>>({});
-  const stlViewerContainerRef = useRef<HTMLDivElement | null>(null);
+  const modelViewerContainerRef = useRef<HTMLDivElement | null>(null);
 
   const filteredMediaAssets = useMemo(() => {
     if (mediaFilter === 'current') {
@@ -102,16 +103,50 @@ export const ProductionView: React.FC = () => {
     return fileName.endsWith('.stl') || fileType.includes('stl');
   };
 
-  const handleOpenStlViewer = (asset: PartMediaAsset) => {
-    setSelectedStlAsset(asset);
-    setStlViewerError('');
-    setShowStlViewerModal(true);
+  const isObjAsset = (asset: PartMediaAsset) => {
+    const fileName = asset.fileName.toLowerCase();
+    const fileType = asset.fileType.toLowerCase();
+    return fileName.endsWith('.obj') || fileType.includes('obj');
+  };
+
+  const isViewableModelAsset = (asset: PartMediaAsset) => {
+    return isStlAsset(asset) || isObjAsset(asset);
+  };
+
+  const downloadModelAsset = (asset: PartMediaAsset) => {
+    if (asset.contentFormat === 'text' && asset.textContent) {
+      const blob = new Blob([asset.textContent], { type: asset.fileType || 'text/plain' });
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = asset.fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+      return;
+    }
+
+    if (asset.dataUrl) {
+      const link = document.createElement('a');
+      link.href = asset.dataUrl;
+      link.download = asset.fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const handleOpenModelViewer = (asset: PartMediaAsset) => {
+    setSelectedModelAsset(asset);
+    setModelViewerError('');
+    setShowModelViewerModal(true);
   };
 
   useEffect(() => {
-    if (!showStlViewerModal || !selectedStlAsset || !stlViewerContainerRef.current) return;
+    if (!showModelViewerModal || !selectedModelAsset || !modelViewerContainerRef.current) return;
 
-    const container = stlViewerContainerRef.current;
+    const container = modelViewerContainerRef.current;
     const width = Math.max(container.clientWidth, 320);
     const height = Math.max(container.clientHeight, 320);
 
@@ -143,7 +178,7 @@ export const ProductionView: React.FC = () => {
     scene.add(grid);
 
     let animationFrame = 0;
-    let mesh: THREE.Mesh | null = null;
+    const disposables: Array<THREE.BufferGeometry | THREE.Material> = [];
 
     const animate = () => {
       animationFrame = window.requestAnimationFrame(animate);
@@ -159,63 +194,115 @@ export const ProductionView: React.FC = () => {
       renderer.setSize(newWidth, newHeight);
     };
 
-    const loadStl = async () => {
+    const frameModel = (object: THREE.Object3D) => {
+      const box = new THREE.Box3().setFromObject(object);
+      const center = box.getCenter(new THREE.Vector3());
+      object.position.sub(center);
+
+      const size = box.getSize(new THREE.Vector3()).length() || 1;
+      const distance = Math.max(80, size * 1.3);
+      camera.position.set(distance * 0.8, -distance * 0.6, distance * 0.8);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    };
+
+    const loadModel = async () => {
       try {
-        const response = await fetch(selectedStlAsset.dataUrl);
-        const buffer = await response.arrayBuffer();
-        const loader = new STLLoader();
-        const geometry = loader.parse(buffer);
-        geometry.computeVertexNormals();
+        if (isStlAsset(selectedModelAsset)) {
+          const response = await fetch(selectedModelAsset.dataUrl);
+          const buffer = await response.arrayBuffer();
+          const loader = new STLLoader();
+          const geometry = loader.parse(buffer);
+          geometry.computeVertexNormals();
 
-        const material = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          metalness: 0.15,
-          roughness: 0.55,
-        });
+          const material = new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            metalness: 0.15,
+            roughness: 0.55,
+          });
 
-        mesh = new THREE.Mesh(geometry, material);
-        mesh.rotation.x = -Math.PI / 2;
-        scene.add(mesh);
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.rotation.x = -Math.PI / 2;
+          scene.add(mesh);
 
-        geometry.computeBoundingBox();
-        const box = new THREE.Box3().setFromObject(mesh);
-        const center = box.getCenter(new THREE.Vector3());
-        mesh.position.sub(center);
+          disposables.push(geometry, material);
+          frameModel(mesh);
+        } else {
+          const objLoader = new OBJLoader();
+          let objText = selectedModelAsset.contentFormat === 'text' ? (selectedModelAsset.textContent || '') : '';
 
-        const size = box.getSize(new THREE.Vector3()).length() || 1;
-        const distance = Math.max(80, size * 1.3);
-        camera.position.set(distance * 0.8, -distance * 0.6, distance * 0.8);
-        controls.target.set(0, 0, 0);
-        controls.update();
+          if (!objText) {
+            const response = await fetch(selectedModelAsset.dataUrl);
+            const buffer = await response.arrayBuffer();
+            try {
+              objText = new TextDecoder('utf-8').decode(buffer);
+            } catch {
+              objText = '';
+            }
+
+            if (!objText) {
+              objText = new TextDecoder('iso-8859-1').decode(buffer);
+            }
+          }
+
+          const object: THREE.Group = objLoader.parse(objText);
+
+          object.traverse((node) => {
+            if ((node as THREE.Mesh).isMesh) {
+              const mesh = node as THREE.Mesh;
+              if (!mesh.material) {
+                mesh.material = new THREE.MeshStandardMaterial({
+                  color: 0x38bdf8,
+                  metalness: 0.15,
+                  roughness: 0.55,
+                });
+              }
+              if (mesh.geometry) {
+                mesh.geometry.computeVertexNormals();
+                disposables.push(mesh.geometry);
+              }
+              if (Array.isArray(mesh.material)) {
+                mesh.material.forEach(material => disposables.push(material));
+              } else if (mesh.material) {
+                disposables.push(mesh.material);
+              }
+            }
+          });
+
+          let meshCount = 0;
+          object.traverse((node) => {
+            if ((node as THREE.Mesh).isMesh) meshCount += 1;
+          });
+          if (meshCount === 0) {
+            throw new Error('OBJ sem malha renderizavel.');
+          }
+
+          object.rotation.x = -Math.PI / 2;
+          scene.add(object);
+          frameModel(object);
+        }
 
         animate();
       } catch (error) {
-        console.error('Falha ao abrir STL:', error);
-        setStlViewerError('Nao foi possivel carregar o arquivo STL para visualizacao.');
+        console.error('Falha ao abrir modelo 3D:', error);
+        setModelViewerError('Nao foi possivel carregar o arquivo 3D para visualizacao.');
       }
     };
 
-    void loadStl();
+    void loadModel();
     window.addEventListener('resize', handleResize);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       controls.dispose();
-      if (mesh) {
-        mesh.geometry.dispose();
-        if (Array.isArray(mesh.material)) {
-          mesh.material.forEach(m => m.dispose());
-        } else {
-          mesh.material.dispose();
-        }
-      }
+      disposables.forEach(item => item.dispose());
       renderer.dispose();
       if (renderer.domElement.parentElement === container) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [showStlViewerModal, selectedStlAsset]);
+  }, [showModelViewerModal, selectedModelAsset]);
 
   const refreshActiveProductions = (viewer?: { name?: string; sector?: string; isAdmin?: boolean }) => {
     const allActive = systemStore.getActiveProductions();
@@ -424,29 +511,66 @@ export const ProductionView: React.FC = () => {
     if (files.length === 0 || !partId) return;
 
     let pending = files.length;
+
+    const finishOne = () => {
+      pending -= 1;
+      if (pending === 0) {
+        refreshPartMedia(partId);
+        alert(`${files.length} arquivo(s) enviado(s) para o setor ${currentSector}.`);
+      }
+    };
+
     files.forEach((file) => {
+      const isObjFile = file.name.toLowerCase().endsWith('.obj') || file.type.toLowerCase().includes('obj');
       const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = String(reader.result || '');
-        if (dataUrl) {
+      reader.onerror = () => {
+        alert(`Falha ao ler o arquivo: ${file.name}`);
+        finishOne();
+      };
+
+      if (isObjFile) {
+        reader.onload = () => {
+          const textContent = String(reader.result || '');
+          if (!textContent) {
+            alert(`Falha ao processar OBJ: ${file.name}`);
+            finishOne();
+            return;
+          }
+
           systemStore.addPartMedia({
             partCode: partId,
             processId: processId || undefined,
             sector: currentSector || undefined,
             uploadedBy: employeeName || undefined,
             fileName: file.name,
-            fileType: file.type || 'application/octet-stream',
-            dataUrl,
+            fileType: file.type || 'text/plain',
+            dataUrl: '',
+            contentFormat: 'text',
+            textContent,
           });
-        }
 
-        pending -= 1;
-        if (pending === 0) {
-          refreshPartMedia(partId);
-          alert(`${files.length} arquivo(s) enviado(s) para o setor ${currentSector}.`);
-        }
-      };
-      reader.readAsDataURL(file);
+          finishOne();
+        };
+        reader.readAsText(file);
+      } else {
+        reader.onload = () => {
+          const dataUrl = String(reader.result || '');
+          if (dataUrl) {
+            systemStore.addPartMedia({
+              partCode: partId,
+              processId: processId || undefined,
+              sector: currentSector || undefined,
+              uploadedBy: employeeName || undefined,
+              fileName: file.name,
+              fileType: file.type || 'application/octet-stream',
+              dataUrl,
+              contentFormat: 'dataUrl',
+            });
+          }
+          finishOne();
+        };
+        reader.readAsDataURL(file);
+      }
     });
 
     event.target.value = '';
@@ -947,22 +1071,22 @@ export const ProductionView: React.FC = () => {
 
                         {isModel && (
                           <div className="flex items-center gap-3">
-                            {isStlAsset(asset) && (
+                            {isViewableModelAsset(asset) && (
                               <button
                                 type="button"
-                                onClick={() => handleOpenStlViewer(asset)}
+                                onClick={() => handleOpenModelViewer(asset)}
                                 className="text-xs px-2 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
                               >
-                                Visualizar STL
+                                Visualizar 3D
                               </button>
                             )}
-                            <a
-                              href={asset.dataUrl}
-                              download={asset.fileName}
+                            <button
+                              type="button"
+                              onClick={() => downloadModelAsset(asset)}
                               className="text-xs text-cyan-300 underline"
                             >
                               Baixar arquivo 3D
-                            </a>
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1089,18 +1213,18 @@ export const ProductionView: React.FC = () => {
                               {isVideo && <video src={asset.dataUrl} controls className="w-full rounded" />}
                               {isModel && (
                                 <div className="flex items-center gap-3">
-                                  {isStlAsset(asset) && (
+                                  {isViewableModelAsset(asset) && (
                                     <button
                                       type="button"
-                                      onClick={() => handleOpenStlViewer(asset)}
+                                      onClick={() => handleOpenModelViewer(asset)}
                                       className="text-xs px-2 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
                                     >
-                                      Visualizar STL
+                                      Visualizar 3D
                                     </button>
                                   )}
-                                  <a href={asset.dataUrl} download={asset.fileName} className="text-sm text-cyan-300 underline">
+                                  <button type="button" onClick={() => downloadModelAsset(asset)} className="text-sm text-cyan-300 underline">
                                     Baixar arquivo 3D
-                                  </a>
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -1125,20 +1249,20 @@ export const ProductionView: React.FC = () => {
         </div>
       )}
 
-      {showStlViewerModal && (
+      {showModelViewerModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
           <div className="bg-[#2e0249] border-2 border-cyan-400 rounded-lg shadow-2xl max-w-5xl w-full animate-in zoom-in duration-300 overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-[#570a8a]">
               <div>
-                <h3 className="text-cyan-300 text-lg font-bold">Visualizador STL (Exocad)</h3>
-                <p className="text-xs text-cyan-100 mt-1">{selectedStlAsset?.fileName}</p>
+                <h3 className="text-cyan-300 text-lg font-bold">Visualizador 3D (STL/OBJ Exocad)</h3>
+                <p className="text-xs text-cyan-100 mt-1">{selectedModelAsset?.fileName}</p>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  setShowStlViewerModal(false);
-                  setSelectedStlAsset(null);
-                  setStlViewerError('');
+                  setShowModelViewerModal(false);
+                  setSelectedModelAsset(null);
+                  setModelViewerError('');
                 }}
                 className="text-gray-400 hover:text-white transition-colors"
               >
@@ -1149,24 +1273,24 @@ export const ProductionView: React.FC = () => {
             <div className="p-4 bg-[#1b002b]">
               <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
                 <p className="text-xs text-cyan-200">Use o mouse para girar, zoom e mover o modelo.</p>
-                {selectedStlAsset && (
-                  <a
-                    href={selectedStlAsset.dataUrl}
-                    download={selectedStlAsset.fileName}
+                {selectedModelAsset && (
+                  <button
+                    type="button"
+                    onClick={() => downloadModelAsset(selectedModelAsset)}
                     className="text-xs px-3 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
                   >
-                    Baixar STL
-                  </a>
+                    Baixar 3D
+                  </button>
                 )}
               </div>
 
-              {stlViewerError ? (
+              {modelViewerError ? (
                 <div className="h-[60vh] min-h-[360px] rounded border border-red-500/50 bg-red-950/20 flex items-center justify-center px-4 text-center text-red-300 text-sm">
-                  {stlViewerError}
+                  {modelViewerError}
                 </div>
               ) : (
                 <div
-                  ref={stlViewerContainerRef}
+                  ref={modelViewerContainerRef}
                   className="h-[60vh] min-h-[360px] rounded border border-[#570a8a] bg-slate-900"
                 />
               )}
