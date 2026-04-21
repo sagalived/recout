@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { UserCircle, Trash2, Edit, Save } from 'lucide-react';
+import { UserCircle, Trash2, Edit, Save, X } from 'lucide-react';
 import { systemStore, Client } from '../services/storage';
 
 export const ClientForm: React.FC = () => {
@@ -123,6 +123,7 @@ export const ClientForm: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    try {
     const currentUser = systemStore.getCurrentUser();
     const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
     if (!isAdmin) {
@@ -133,6 +134,10 @@ export const ClientForm: React.FC = () => {
     if (!window.confirm('Tem certeza que deseja excluir este cliente?')) return;
     systemStore.removeClient(id);
     setClients([...systemStore.getClients()]); // Force Refresh list with new reference
+    } catch (error) {
+      console.error('Falha ao excluir cliente:', error);
+      alert('Não foi possível excluir o cliente.');
+    }
   };
 
   const handleStartEdit = (client: Client) => {
@@ -145,11 +150,11 @@ export const ClientForm: React.FC = () => {
 
     setEditingClientId(client.id);
     setEditingClientData({
-      name: client.name,
-      doc: client.doc,
-      email: client.email,
-      contact: client.contact,
-      address: client.address,
+      name: client.name || '',
+      doc: client.doc || '',
+      email: client.email || '',
+      contact: client.contact || '',
+      address: client.address || '',
     });
   };
 
@@ -176,15 +181,23 @@ export const ClientForm: React.FC = () => {
       return;
     }
 
-    if (!editingClientData.name || !editingClientData.doc || !editingClientData.email || !editingClientData.contact || !editingClientData.address) {
+    const normalized = {
+      name: String(editingClientData.name || '').trim(),
+      doc: String(editingClientData.doc || '').trim(),
+      email: String(editingClientData.email || '').trim(),
+      contact: String(editingClientData.contact || '').trim(),
+      address: String(editingClientData.address || '').trim(),
+    };
+
+    if (!normalized.name || !normalized.doc || !normalized.email || !normalized.contact || !normalized.address) {
       alert('Erro: preencha todos os campos do cliente.');
       return;
     }
 
     const duplicate = systemStore.getClients().some(c =>
       c.id !== id && (
-        c.doc.trim().toLowerCase() === editingClientData.doc.trim().toLowerCase() ||
-        c.name.trim().toLowerCase() === editingClientData.name.trim().toLowerCase()
+        c.doc.trim().toLowerCase() === normalized.doc.toLowerCase() ||
+        c.name.trim().toLowerCase() === normalized.name.toLowerCase()
       )
     );
 
@@ -195,11 +208,11 @@ export const ClientForm: React.FC = () => {
 
     systemStore.updateClient({
       id,
-      name: editingClientData.name.trim(),
-      doc: editingClientData.doc.trim(),
-      email: editingClientData.email.trim(),
-      contact: editingClientData.contact.trim(),
-      address: editingClientData.address.trim(),
+      name: normalized.name,
+      doc: normalized.doc,
+      email: normalized.email,
+      contact: normalized.contact,
+      address: normalized.address,
     });
 
     setClients([...systemStore.getClients()]);
@@ -312,6 +325,7 @@ export const ClientForm: React.FC = () => {
                         <div className="space-y-2">
                           <input name="name" value={editingClientData.name} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-white" />
                           <input name="email" value={editingClientData.email} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-xs text-purple-200" />
+                          <input name="address" value={editingClientData.address} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-xs text-purple-200" placeholder="Endereço" />
                         </div>
                       ) : (
                         <>
@@ -333,19 +347,20 @@ export const ClientForm: React.FC = () => {
                     <td className="p-4 flex justify-center gap-3">
                       {editingClientId === client.id ? (
                         <>
-                          <button onClick={() => handleUpdate(client.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
+                          <button type="button" onClick={() => handleUpdate(client.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
                             <Save className="w-5 h-5" />
                           </button>
-                          <button onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
-                            <Trash2 className="w-5 h-5" />
+                          <button type="button" onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
+                            <X className="w-5 h-5" />
                           </button>
                         </>
                       ) : (
                         <>
-                          <button onClick={() => handleStartEdit(client)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar cliente' : 'Somente administrador pode editar'}>
+                          <button type="button" onClick={() => handleStartEdit(client)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar cliente' : 'Somente administrador pode editar'}>
                             <Edit className="w-5 h-5" />
                           </button>
                           <button 
+                            type="button"
                             onClick={() => handleDelete(client.id)}
                             disabled={!isAdmin}
                             className={`transition-colors ${isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-500 cursor-not-allowed'}`}

@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Users, Edit, Trash2, Save } from 'lucide-react';
+import { Camera, Users, Edit, Trash2, Save, X } from 'lucide-react';
 import { systemStore, Employee } from '../services/storage';
 
 interface EmployeeFormProps {
@@ -151,6 +151,7 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
   };
 
   const handleDelete = (id: number) => {
+    try {
     const currentUser = systemStore.getCurrentUser();
     const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
     if (!isAdmin) {
@@ -168,6 +169,10 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
 
     systemStore.removeEmployee(id);
     setEmployees([...systemStore.getEmployees()]); // Force state update
+    } catch (error) {
+      console.error('Falha ao excluir usuário:', error);
+      alert('Não foi possível excluir o usuário.');
+    }
   };
 
   const handleStartEdit = (emp: Employee) => {
@@ -476,19 +481,20 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
                     <td className="p-4 flex justify-center gap-3">
                       {editingEmployeeId === emp.id ? (
                         <>
-                          <button onClick={() => handleUpdate(emp.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
+                          <button type="button" onClick={() => handleUpdate(emp.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
                             <Save className="w-5 h-5" />
                           </button>
-                          <button onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
-                            <Trash2 className="w-5 h-5" />
+                          <button type="button" onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
+                            <X className="w-5 h-5" />
                           </button>
                         </>
                       ) : (
                         <>
-                          <button onClick={() => handleStartEdit(emp)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar usuário' : 'Somente administrador pode editar'}>
+                          <button type="button" onClick={() => handleStartEdit(emp)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar usuário' : 'Somente administrador pode editar'}>
                             <Edit className="w-5 h-5" />
                           </button>
                           <button 
+                            type="button"
                             onClick={() => handleDelete(emp.id)}
                             disabled={!isAdmin || emp.username?.trim().toLowerCase() === 'admin'}
                             className={`transition-colors ${isAdmin && emp.username?.trim().toLowerCase() !== 'admin' ? 'text-red-400 hover:text-red-300' : 'text-gray-500 cursor-not-allowed'}`}

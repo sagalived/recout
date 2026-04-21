@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Package, Trash2, Edit, Save, UserCircle, UserPlus, X } from 'lucide-react';
+import { Package, Trash2, Edit, Save, UserCircle, UserPlus, X as CloseIcon } from 'lucide-react';
 import { systemStore, Product, Client } from '../services/storage';
 
 export const ProductForm: React.FC = () => {
@@ -149,6 +149,7 @@ export const ProductForm: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    try {
     const currentUser = systemStore.getCurrentUser();
     const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
     if (!isAdmin) {
@@ -162,6 +163,10 @@ export const ProductForm: React.FC = () => {
       // Regenerate code in case we deleted the last one (optional, but keeps sequence tight)
       setTimeout(generateNewCode, 50);
     }
+    } catch (error) {
+      console.error('Falha ao excluir produto:', error);
+      alert('Não foi possível excluir o produto.');
+    }
   };
 
   const handleStartEdit = (product: Product) => {
@@ -174,9 +179,9 @@ export const ProductForm: React.FC = () => {
 
     setEditingProductId(product.id);
     setEditingProductData({
-      name: product.name,
-      client: product.client,
-      sector: product.sector,
+      name: product.name || '',
+      client: product.client || '',
+      sector: product.sector || 'Triagem',
       deliveryDeadline: product.deliveryDeadline || ''
     });
   };
@@ -198,7 +203,14 @@ export const ProductForm: React.FC = () => {
       return;
     }
 
-    if (!editingProductData.name || !editingProductData.client || !editingProductData.sector || !editingProductData.deliveryDeadline) {
+    const normalized = {
+      name: String(editingProductData.name || '').trim(),
+      client: String(editingProductData.client || '').trim(),
+      sector: String(editingProductData.sector || '').trim(),
+      deliveryDeadline: String(editingProductData.deliveryDeadline || '').trim(),
+    };
+
+    if (!normalized.name || !normalized.client || !normalized.sector || !normalized.deliveryDeadline) {
       alert('Erro: preencha nome, cliente, setor e prazo.');
       return;
     }
@@ -208,10 +220,10 @@ export const ProductForm: React.FC = () => {
 
     systemStore.updateProduct({
       ...original,
-      name: editingProductData.name,
-      client: editingProductData.client,
-      sector: editingProductData.sector,
-      deliveryDeadline: editingProductData.deliveryDeadline,
+      name: normalized.name,
+      client: normalized.client,
+      sector: normalized.sector,
+      deliveryDeadline: normalized.deliveryDeadline,
     });
 
     setProducts([...systemStore.getProducts()]);
@@ -394,19 +406,20 @@ export const ProductForm: React.FC = () => {
                     <td className="p-4 flex justify-center gap-3">
                       {editingProductId === product.id ? (
                         <>
-                          <button onClick={() => handleUpdate(product.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
+                          <button type="button" onClick={() => handleUpdate(product.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
                             <Save className="w-5 h-5" />
                           </button>
-                          <button onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
-                            <Trash2 className="w-5 h-5" />
+                          <button type="button" onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
+                            <CloseIcon className="w-5 h-5" />
                           </button>
                         </>
                       ) : (
                         <>
-                          <button onClick={() => handleStartEdit(product)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar produto' : 'Somente administrador pode editar'}>
+                          <button type="button" onClick={() => handleStartEdit(product)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar produto' : 'Somente administrador pode editar'}>
                             <Edit className="w-5 h-5" />
                           </button>
                           <button 
+                            type="button"
                             onClick={() => handleDelete(product.id)}
                             disabled={!isAdmin}
                             className={`transition-colors ${isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-500 cursor-not-allowed'}`}
@@ -441,7 +454,7 @@ export const ProductForm: React.FC = () => {
                 onClick={() => setShowClientModal(false)}
                 className="text-gray-300 hover:text-white transition-colors"
               >
-                <X className="w-5 h-5" />
+                <CloseIcon className="w-5 h-5" />
               </button>
             </div>
 
