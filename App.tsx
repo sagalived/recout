@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { EmployeeForm } from './components/EmployeeForm';
 import { ClientForm } from './components/ClientForm';
@@ -11,7 +11,7 @@ import { RecoveryTool } from './components/RecoveryTool';
 import { Faq } from './components/Faq';
 import { Login } from './components/Login';
 import { Register } from './components/Register';
-import { systemStore } from './services/storage';
+import { PersistedSystemState, systemStore } from './services/storage';
 import { ActiveView } from './types/activeView';
 
 const mobileNavItems = [
@@ -26,6 +26,91 @@ const mobileNavItems = [
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>(ActiveView.LOGIN);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'syncing' | 'ok' | 'offline'>('syncing');
+  const lastSyncedRef = useRef<number>(0);
+
+  useEffect(() => {
+    let disposed = false;
+    let syncing = false;
+
+    const pushSnapshot = async (force = false) => {
+      if (syncing) return;
+      const localState = systemStore.getPersistedState();
+      const localUpdatedAt = Number(localState.updatedAt || 0);
+      if (!force && localUpdatedAt <= lastSyncedRef.current) return;
+
+      syncing = true;
+      try {
+        const response = await fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: localState }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Falha ao salvar snapshot remoto.');
+        }
+
+        lastSyncedRef.current = localUpdatedAt;
+        if (!disposed) setCloudSyncStatus('ok');
+      } catch (error) {
+        console.error('Erro no push para nuvem:', error);
+        if (!disposed) setCloudSyncStatus('offline');
+      } finally {
+        syncing = false;
+      }
+    };
+
+    const bootstrapSync = async () => {
+      try {
+        const localState = systemStore.getPersistedState();
+        const localUpdatedAt = Number(localState.updatedAt || 0);
+
+        const response = await fetch('/api/state', { cache: 'no-store' });
+        let remoteState: PersistedSystemState | null = null;
+
+        if (response.ok) {
+          const payload = await response.json();
+          remoteState = payload?.state || null;
+        }
+
+        const remoteUpdatedAt = Number(remoteState?.updatedAt || 0);
+
+        if (remoteState && remoteUpdatedAt > localUpdatedAt) {
+          systemStore.replacePersistedState(remoteState);
+          lastSyncedRef.current = remoteUpdatedAt;
+          if (!disposed) {
+            setCloudSyncStatus('ok');
+            window.location.reload();
+          }
+          return;
+        }
+
+        await pushSnapshot(true);
+      } catch (error) {
+        console.error('Erro ao inicializar sync com nuvem:', error);
+        if (!disposed) setCloudSyncStatus('offline');
+      }
+    };
+
+    void bootstrapSync();
+
+    const timer = window.setInterval(() => {
+      void pushSnapshot(false);
+    }, 15000);
+
+    const onWindowFocus = () => {
+      void pushSnapshot(false);
+    };
+
+    window.addEventListener('focus', onWindowFocus);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onWindowFocus);
+    };
+  }, []);
 
   const handleLogin = () => {
     setActiveView(ActiveView.DASHBOARD);
@@ -91,13 +176,18 @@ export default function App() {
         <div className="md:hidden bg-[#2e0249] border border-[#570a8a] rounded-xl p-3 mb-3 shadow-lg">
           <div className="flex items-center justify-between gap-3 mb-3">
             <h1 className="text-[#FFD700] font-bold text-base uppercase tracking-wide">Gestão de Produção</h1>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="text-xs font-bold text-[#FFD700] border border-[#570a8a] px-3 py-1.5 rounded-md"
-            >
-              Sair
-            </button>
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] px-2 py-1 rounded border ${cloudSyncStatus === 'ok' ? 'border-emerald-500 text-emerald-300' : cloudSyncStatus === 'syncing' ? 'border-amber-500 text-amber-300' : 'border-red-500 text-red-300'}`}>
+                {cloudSyncStatus === 'ok' ? 'Nuvem OK' : cloudSyncStatus === 'syncing' ? 'Sincronizando' : 'Sem Nuvem'}
+              </span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="text-xs font-bold text-[#FFD700] border border-[#570a8a] px-3 py-1.5 rounded-md"
+              >
+                Sair
+              </button>
+            </div>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {mobileNavItems.map(item => (
@@ -114,6 +204,11 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto scroll-smooth rounded-2xl bg-[#581c87]/50 border border-purple-700/30 shadow-2xl p-4 md:p-10">
+          <div className="hidden md:flex justify-end mb-3">
+            <span className={`text-xs px-3 py-1 rounded border ${cloudSyncStatus === 'ok' ? 'border-emerald-500 text-emerald-300' : cloudSyncStatus === 'syncing' ? 'border-amber-500 text-amber-300' : 'border-red-500 text-red-300'}`}>
+              {cloudSyncStatus === 'ok' ? 'Sincronizado com Vercel' : cloudSyncStatus === 'syncing' ? 'Sincronizando com Vercel...' : 'Modo local (nuvem indisponível)'}
+            </span>
+          </div>
           <div className="max-w-5xl mx-auto pb-6 md:pb-0">
             {renderContent()}
           </div>

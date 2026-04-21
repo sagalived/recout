@@ -104,6 +104,18 @@ export interface ProductionSession {
   stopTime: number | null;
 }
 
+export interface PersistedSystemState {
+  employees: Employee[];
+  products: Product[];
+  clients: Client[];
+  production: ProductionEntry[];
+  deliveryAlerts: DeliveryAlert[];
+  partMedia: PartMediaAsset[];
+  sectors: Sector[];
+  currentUser: Employee | null;
+  updatedAt: number;
+}
+
 class SystemStore {
   // Initial Data Defaults (Clean State - Only Admin)
   employees: Employee[] = [
@@ -124,6 +136,7 @@ class SystemStore {
   
   // Storage Key - Changed to force a fresh start and clean data
   private STORAGE_KEY = 'recout_system_v5_reset';
+  private updatedAt = Date.now();
 
   constructor() {
     this.loadFromStorage();
@@ -156,6 +169,7 @@ class SystemStore {
         }
         if (parsed.partMedia && Array.isArray(parsed.partMedia)) this.partMedia = parsed.partMedia;
         if (parsed.sectors && Array.isArray(parsed.sectors)) this.sectors = parsed.sectors;
+        if (typeof parsed.updatedAt === 'number') this.updatedAt = parsed.updatedAt;
         
         // Restore logged in user from storage if available
         if (parsed.currentUser) {
@@ -254,7 +268,8 @@ class SystemStore {
 
   private saveToStorage() {
     try {
-      const data = {
+      this.updatedAt = Date.now();
+      const data: PersistedSystemState = {
         employees: this.employees,
         products: this.products,
         clients: this.clients,
@@ -262,12 +277,56 @@ class SystemStore {
         deliveryAlerts: this.deliveryAlerts,
         partMedia: this.partMedia,
         sectors: this.sectors,
-        currentUser: this.currentUser 
+        currentUser: this.currentUser,
+        updatedAt: this.updatedAt,
       };
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
       console.error("Erro ao salvar dados:", e);
     }
+  }
+
+  getPersistedState(): PersistedSystemState {
+    this.loadFromStorage();
+    return {
+      employees: this.employees,
+      products: this.products,
+      clients: this.clients,
+      production: this.production,
+      deliveryAlerts: this.deliveryAlerts,
+      partMedia: this.partMedia,
+      sectors: this.sectors,
+      currentUser: this.currentUser,
+      updatedAt: this.updatedAt,
+    };
+  }
+
+  replacePersistedState(state: PersistedSystemState) {
+    if (!state) return;
+
+    this.employees = Array.isArray(state.employees) ? state.employees : this.employees;
+    this.products = Array.isArray(state.products) ? state.products : this.products;
+    this.clients = Array.isArray(state.clients) ? state.clients : this.clients;
+    this.production = Array.isArray(state.production) ? state.production : this.production;
+    this.deliveryAlerts = Array.isArray(state.deliveryAlerts) ? state.deliveryAlerts : this.deliveryAlerts;
+    this.partMedia = Array.isArray(state.partMedia) ? state.partMedia : this.partMedia;
+    this.sectors = Array.isArray(state.sectors) && state.sectors.length > 0 ? state.sectors : DEFAULT_SECTORS.map(s => ({ ...s }));
+    this.currentUser = state.currentUser || null;
+    this.updatedAt = typeof state.updatedAt === 'number' ? state.updatedAt : Date.now();
+
+    const snapshot: PersistedSystemState = {
+      employees: this.employees,
+      products: this.products,
+      clients: this.clients,
+      production: this.production,
+      deliveryAlerts: this.deliveryAlerts,
+      partMedia: this.partMedia,
+      sectors: this.sectors,
+      currentUser: this.currentUser,
+      updatedAt: this.updatedAt,
+    };
+
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
   }
 
   // --- AUTH ---

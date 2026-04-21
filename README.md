@@ -1,4 +1,4 @@
-# Gestão de usuario
+# Gestão de Produção
 
 Sistema web para controle de produção por setor, com histórico por processo, alertas de entrega e visão administrativa.
 
@@ -30,6 +30,21 @@ Passos:
 3. Em Environment Variables, configure:
    VITE_GEMINI_API_KEY
 4. Deploy.
+
+## Persistência em Produção (Vercel)
+
+Para salvar cadastros, processos e mídias em produção (nuvem), o projeto usa API serverless + Vercel Postgres.
+
+Passos no Vercel:
+1. Abra o projeto no Vercel.
+2. Vá em Storage e crie/associe um banco Vercel Postgres.
+3. Confirme que as variáveis de banco foram adicionadas automaticamente ao projeto.
+4. Faça novo deploy.
+
+Com isso, o sistema:
+- carrega o snapshot remoto ao abrir a aplicação;
+- salva automaticamente mudanças na nuvem a cada poucos segundos;
+- mantém cadastros, processos e arquivos de evolução persistidos entre acessos/dispositivos.
 
 Configuração usada:
 - Framework: Vite
