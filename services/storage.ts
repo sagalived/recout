@@ -319,7 +319,20 @@ class SystemStore {
         currentUser: this.currentUser,
         updatedAt: this.updatedAt,
       };
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+      
+      try {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+      } catch (storageError: any) {
+        if (storageError.name === 'QuotaExceededError' || storageError.message.toLowerCase().includes('quota')) {
+          console.warn("Storage quota exceeded! Clearing partMedia to free up space...");
+          this.partMedia = [];
+          data.partMedia = [];
+          localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+        } else {
+          throw storageError;
+        }
+      }
+
       // Sync imediato com o banco no Vercel (fire-and-forget)
       void fetch('/api/state', {
         method: 'POST',
@@ -390,7 +403,16 @@ class SystemStore {
       updatedAt: this.updatedAt,
     };
 
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (storageError: any) {
+      if (storageError.name === 'QuotaExceededError' || storageError.message.toLowerCase().includes('quota')) {
+        console.warn("Storage quota exceeded during replacePersistedState! Clearing partMedia...");
+        this.partMedia = [];
+        snapshot.partMedia = [];
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
+      }
+    }
   }
 
   // --- AUTH ---

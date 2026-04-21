@@ -41,10 +41,20 @@ export default function App() {
 
       syncing = true;
       try {
+        let payloadStr = JSON.stringify({ state: localState });
+        
+        // Vercel Serverless Functions limit payload to 4.5MB.
+        // If string length exceeds ~4MB, clear partMedia to prevent 413 error.
+        if (payloadStr.length > 4000000) {
+          console.warn("Payload size > 4MB. Trimming partMedia for Vercel sync...");
+          const trimmedState = { ...localState, partMedia: [] };
+          payloadStr = JSON.stringify({ state: trimmedState });
+        }
+
         const response = await fetch('/api/state', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ state: localState }),
+          body: payloadStr,
         });
 
         if (!response.ok) {
@@ -107,7 +117,12 @@ export default function App() {
 
     const handleBeforeUnload = () => {
       const state = systemStore.getPersistedState();
-      const blob = new Blob([JSON.stringify({ state })], { type: 'application/json' });
+      let payloadStr = JSON.stringify({ state });
+      if (payloadStr.length > 4000000) {
+        const trimmedState = { ...state, partMedia: [] };
+        payloadStr = JSON.stringify({ state: trimmedState });
+      }
+      const blob = new Blob([payloadStr], { type: 'application/json' });
       navigator.sendBeacon('/api/state', blob);
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
