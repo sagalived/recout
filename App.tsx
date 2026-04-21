@@ -14,6 +14,16 @@ import { Register } from './components/Register';
 import { systemStore } from './services/storage';
 import { ActiveView } from './types/activeView';
 
+const mobileNavItems = [
+  { id: ActiveView.DASHBOARD, label: 'Visão Geral' },
+  { id: ActiveView.EMPLOYEE, label: 'Usuários' },
+  { id: ActiveView.CLIENT, label: 'Clientes' },
+  { id: ActiveView.PRODUCT, label: 'Produtos' },
+  { id: ActiveView.SECTOR, label: 'Setores' },
+  { id: ActiveView.PRODUCTION, label: 'Produção' },
+  { id: ActiveView.FAQ, label: 'Ajuda' },
+];
+
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>(ActiveView.LOGIN);
 
@@ -77,9 +87,34 @@ export default function App() {
       <Sidebar activeView={activeView} setActiveView={setActiveView} onLogout={handleLogout} />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#4a148c] p-4 md:p-8">
-        <div className="flex-1 overflow-y-auto scroll-smooth rounded-2xl bg-[#581c87]/50 border border-purple-700/30 shadow-2xl p-6 md:p-10">
-          <div className="max-w-4xl mx-auto">
+      <main className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#4a148c] p-3 md:p-8">
+        <div className="md:hidden bg-[#2e0249] border border-[#570a8a] rounded-xl p-3 mb-3 shadow-lg">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h1 className="text-[#FFD700] font-bold text-base uppercase tracking-wide">Gestão de Produção</h1>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-xs font-bold text-[#FFD700] border border-[#570a8a] px-3 py-1.5 rounded-md"
+            >
+              Sair
+            </button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {mobileNavItems.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveView(item.id)}
+                className={`whitespace-nowrap text-xs font-bold px-3 py-2 rounded-md border transition-colors ${activeView === item.id ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700]' : 'bg-[#3c0360] text-purple-100 border-[#570a8a]'}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scroll-smooth rounded-2xl bg-[#581c87]/50 border border-purple-700/30 shadow-2xl p-4 md:p-10">
+          <div className="max-w-5xl mx-auto pb-6 md:pb-0">
             {renderContent()}
           </div>
         </div>

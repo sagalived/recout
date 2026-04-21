@@ -39,7 +39,7 @@ export const Faq: React.FC = () => {
         Central de Ajuda & Suporte
       </h2>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[600px]">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 min-h-[520px] lg:h-[600px]">
         
         {/* Left Column: Email Form */}
         <div className="bg-[#2e0249] border border-[#570a8a] rounded-xl p-8 shadow-xl flex flex-col relative overflow-hidden group">
@@ -98,7 +98,7 @@ export const Faq: React.FC = () => {
                     <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 rounded-full border-2 border-[#075e54]"></div>
                 </div>
                 <div className="flex-1">
-                    <h3 className="text-white font-bold text-base">Suporte Recout</h3>
+                    <h3 className="text-white font-bold text-base">Suporte Gestão de usuario</h3>
                     <p className="text-green-100 text-xs">Online agora</p>
                 </div>
                 <MessageCircle className="w-6 h-6 text-white/80" />
@@ -112,7 +112,7 @@ export const Faq: React.FC = () => {
                  {/* Attendant Message */}
                  <div className="self-start max-w-[85%] bg-[#202c33] rounded-r-lg rounded-bl-lg p-3 shadow relative z-10 border border-[#2a3942]">
                      <p className="text-sm text-gray-100 leading-relaxed">
-                         Olá! 👋 Bem-vindo ao suporte do Sistema Recout.
+                         Olá! 👋 Bem-vindo ao suporte do Sistema Gestão de usuario.
                      </p>
                      <p className="text-sm text-gray-100 leading-relaxed mt-2">
                          Como podemos ajudar você hoje? Digite sua dúvida abaixo para iniciar o atendimento no WhatsApp.

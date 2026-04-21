@@ -68,6 +68,18 @@ export interface DeliveryAlert {
   delivered: boolean;
 }
 
+export interface PartMediaAsset {
+  id: string;
+  partCode: string;
+  processId?: string;
+  sector?: string;
+  uploadedBy?: string;
+  fileName: string;
+  fileType: string;
+  dataUrl: string;
+  uploadedAt: number;
+}
+
 const DEFAULT_SECTORS: Sector[] = [
   { id: 1, name: 'Triagem', manager: 'João Paulo', description: 'Recebimento e separação inicial de materiais.' },
   { id: 2, name: 'CAD', manager: 'Ana Maria', description: 'Modelagem e detalhamento técnico das peças.' },
@@ -102,6 +114,7 @@ class SystemStore {
   clients: Client[] = [];
   production: ProductionEntry[] = [];
   deliveryAlerts: DeliveryAlert[] = [];
+  partMedia: PartMediaAsset[] = [];
   
   sectors: Sector[] = DEFAULT_SECTORS.map(s => ({ ...s }));
 
@@ -141,6 +154,7 @@ class SystemStore {
             clientEmail: alert.clientEmail || ''
           }));
         }
+        if (parsed.partMedia && Array.isArray(parsed.partMedia)) this.partMedia = parsed.partMedia;
         if (parsed.sectors && Array.isArray(parsed.sectors)) this.sectors = parsed.sectors;
         
         // Restore logged in user from storage if available
@@ -246,6 +260,7 @@ class SystemStore {
         clients: this.clients,
         production: this.production,
         deliveryAlerts: this.deliveryAlerts,
+        partMedia: this.partMedia,
         sectors: this.sectors,
         currentUser: this.currentUser 
       };
@@ -389,6 +404,7 @@ class SystemStore {
     // Remove linked product records (piece) from catalog.
     if (relatedPartCodes.size > 0) {
       this.products = this.products.filter(p => !relatedPartCodes.has(p.code));
+      this.partMedia = this.partMedia.filter(m => !relatedPartCodes.has(m.partCode));
     }
 
     // Remove pending delivery alerts related to this process.
@@ -399,6 +415,29 @@ class SystemStore {
       this.currentSession = null;
     }
 
+    this.saveToStorage();
+  }
+
+  getPartMedia(partCode: string) {
+    this.loadFromStorage();
+    return this.partMedia
+      .filter(m => m.partCode === partCode)
+      .sort((a, b) => b.uploadedAt - a.uploadedAt);
+  }
+
+  addPartMedia(asset: Omit<PartMediaAsset, 'id' | 'uploadedAt'>) {
+    this.loadFromStorage();
+    this.partMedia.push({
+      id: `media-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      uploadedAt: Date.now(),
+      ...asset,
+    });
+    this.saveToStorage();
+  }
+
+  removePartMedia(mediaId: string) {
+    this.loadFromStorage();
+    this.partMedia = this.partMedia.filter(m => m.id !== mediaId);
     this.saveToStorage();
   }
 

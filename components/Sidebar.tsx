@@ -17,7 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onL
     },
     {
       id: ActiveView.EMPLOYEE,
-      label: 'Funcionários',
+      label: 'Usuários',
       icon: Users,
     },
     {
@@ -51,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onL
     <aside className="w-64 bg-[#2e0249] border-r border-[#570a8a] flex-shrink-0 flex flex-col hidden md:flex shadow-xl z-10">
       <div className="h-24 flex items-center justify-center px-6 border-b border-[#570a8a]">
         <h1 className="text-3xl font-bold text-[#FFD700] tracking-wider uppercase drop-shadow-sm">
-          Recout
+          Gestão de Produção
         </h1>
       </div>
 

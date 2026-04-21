@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
-import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle } from 'lucide-react';
-import { systemStore, Product, ProductionEntry, ProductionSession } from '../services/storage';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle, Upload, ImageIcon, Film, Cuboid, ChevronDown, ChevronRight } from 'lucide-react';
+import { systemStore, Product, ProductionEntry, ProductionSession, PartMediaAsset } from '../services/storage';
 
 export const ProductionView: React.FC = () => {
   // Load data from store
@@ -30,8 +30,52 @@ export const ProductionView: React.FC = () => {
   // Modal State
   const [showPartModal, setShowPartModal] = useState(false);
   const [showProcessModal, setShowProcessModal] = useState(false);
+  const [showProgressionModal, setShowProgressionModal] = useState(false);
   const [activeProductions, setActiveProductions] = useState<ProductionEntry[]>([]);
   const [loadedProductionId, setLoadedProductionId] = useState('');
+  const [mediaAssets, setMediaAssets] = useState<PartMediaAsset[]>([]);
+  const [mediaFilter, setMediaFilter] = useState<'all' | 'current'>('all');
+  const [collapsedSectors, setCollapsedSectors] = useState<Record<string, boolean>>({});
+
+  const filteredMediaAssets = useMemo(() => {
+    if (mediaFilter === 'current') {
+      return mediaAssets.filter(asset => asset.sector === currentSector);
+    }
+    return mediaAssets;
+  }, [mediaAssets, mediaFilter, currentSector]);
+
+  const latestImageAsset = useMemo(() => {
+    return mediaAssets.find(asset => asset.fileType.startsWith('image/')) || null;
+  }, [mediaAssets]);
+
+  const progressionGroupedBySector = useMemo(() => {
+    const grouped: Record<string, PartMediaAsset[]> = {};
+    mediaAssets.forEach((asset) => {
+      const sectorKey = asset.sector || 'Sem setor';
+      if (!grouped[sectorKey]) {
+        grouped[sectorKey] = [];
+      }
+      grouped[sectorKey].push(asset);
+    });
+
+    return Object.entries(grouped).sort((a, b) => {
+      const latestA = Math.max(...a[1].map(item => item.uploadedAt));
+      const latestB = Math.max(...b[1].map(item => item.uploadedAt));
+      return latestB - latestA;
+    });
+  }, [mediaAssets]);
+
+  useEffect(() => {
+    setCollapsedSectors(prev => {
+      const next: Record<string, boolean> = { ...prev };
+      progressionGroupedBySector.forEach(([sectorName]) => {
+        if (next[sectorName] === undefined) {
+          next[sectorName] = false;
+        }
+      });
+      return next;
+    });
+  }, [progressionGroupedBySector]);
 
   const getNextSectorInFlow = (sector: string, sectors: string[]) => {
     const currentIndex = sectors.findIndex(s => s === sector);
@@ -74,7 +118,17 @@ export const ProductionView: React.FC = () => {
     setElapsedTime(0);
     setStartTime(0);
     setStopTime(null);
+    setMediaAssets([]);
+    setMediaFilter('all');
     systemStore.clearCurrentSession();
+  };
+
+  const refreshPartMedia = (code: string) => {
+    if (!code) {
+      setMediaAssets([]);
+      return;
+    }
+    setMediaAssets(systemStore.getPartMedia(code));
   };
 
   // Initialization & Persistence Restoration
@@ -218,6 +272,7 @@ export const ProductionView: React.FC = () => {
     setIsRunning(production.status === 'working');
     setIsFinished(production.status === 'finished');
     setElapsedTime(Math.floor((Date.now() - (production.sectorStartTime || production.startTime)) / 1000));
+    refreshPartMedia(production.partCode);
   };
 
   const handleSelectPart = (part: Product) => {
@@ -231,7 +286,47 @@ export const ProductionView: React.FC = () => {
     setIsRunning(false);
     setIsFinished(false);
     setElapsedTime(0);
+    setMediaFilter('all');
+    refreshPartMedia(part.code);
     setShowPartModal(false);
+  };
+
+  const handleUploadFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0 || !partId) return;
+
+    let pending = files.length;
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '');
+        if (dataUrl) {
+          systemStore.addPartMedia({
+            partCode: partId,
+            processId: processId || undefined,
+            sector: currentSector || undefined,
+            uploadedBy: employeeName || undefined,
+            fileName: file.name,
+            fileType: file.type || 'application/octet-stream',
+            dataUrl,
+          });
+        }
+
+        pending -= 1;
+        if (pending === 0) {
+          refreshPartMedia(partId);
+          alert(`${files.length} arquivo(s) enviado(s) para o setor ${currentSector}.`);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    event.target.value = '';
+  };
+
+  const handleRemoveMedia = (mediaId: string) => {
+    systemStore.removePartMedia(mediaId);
+    refreshPartMedia(partId);
   };
 
   const handleStartProduction = () => {
@@ -375,6 +470,7 @@ export const ProductionView: React.FC = () => {
     setElapsedTime(0);
     setStartTime(0);
     setStopTime(null);
+    setMediaFilter('all');
     setShowProcessModal(false);
     setShowPartModal(true);
   };
@@ -386,6 +482,7 @@ export const ProductionView: React.FC = () => {
     setElapsedTime(0);
     setStartTime(0);
     setStopTime(null);
+    setMediaFilter('all');
     setProcessId('');
     setLoadedProductionId('');
     setPartId('');
@@ -528,17 +625,31 @@ export const ProductionView: React.FC = () => {
             {/* Full Width Action Button Row */}
             <div className="pt-4">
                  {!isRunning && !isFinished ? (
-                     <button 
-                        onClick={handleStartProduction}
-                        disabled={!partId || !partName || !employeeName}
-                        className={`w-full font-bold py-4 rounded-md shadow-lg transition-all text-lg flex items-center justify-center gap-3 uppercase tracking-wide ${(!partId || !partName || !employeeName) ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-[#FFD700] hover:bg-[#e6c200] text-[#2e0249] hover:scale-[1.01]'}`}
-                    >
-                        <Play className="w-6 h-6" /> Iniciar Produção
-                    </button>
+                     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                        <button 
+                          onClick={handleStartProduction}
+                          disabled={!partId || !partName || !employeeName}
+                          className={`md:col-span-3 w-full font-bold py-4 rounded-md shadow-lg transition-all text-lg flex items-center justify-center gap-3 uppercase tracking-wide ${(!partId || !partName || !employeeName) ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-[#FFD700] hover:bg-[#e6c200] text-[#2e0249] hover:scale-[1.01]'}`}
+                        >
+                          <Play className="w-6 h-6" /> Iniciar Produção
+                        </button>
+
+                        <label className={`md:col-span-1 w-full font-bold py-4 rounded-md shadow-lg transition-all text-sm flex items-center justify-center gap-2 uppercase tracking-wide cursor-pointer ${partId ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400 cursor-not-allowed'}`}>
+                          <Upload className="w-4 h-4" /> Upload
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={handleUploadFile}
+                            disabled={!partId}
+                            multiple
+                            accept="image/*,video/*,.stl,.obj,.3mf,.step,.stp,.iges,.igs,model/*"
+                          />
+                        </label>
+                     </div>
                  ) : (
                     <div className="flex flex-col gap-3">
                      {isRunning && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <button 
                           onClick={handleNextSector}
                           className="w-full font-bold py-4 rounded-md shadow-lg transition-all text-xl flex items-center justify-center gap-3 uppercase tracking-wide bg-emerald-600 hover:bg-emerald-500 text-white hover:scale-[1.01]"
@@ -550,9 +661,23 @@ export const ProductionView: React.FC = () => {
                           disabled={!isAdmin}
                           className={`w-full font-bold py-4 rounded-md shadow-lg transition-all text-base flex items-center justify-center gap-2 uppercase tracking-wide ${isAdmin ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-gray-700 text-gray-400 cursor-not-allowed'}`}
                         >
-                          <RotateCcw className="w-5 h-5" /> Voltar Setor (Admin)
+                            <RotateCcw className="w-5 h-5" /> Voltar Setor
                         </button>
+                          <label className={`w-full font-bold py-4 rounded-md shadow-lg transition-all text-base flex items-center justify-center gap-2 uppercase tracking-wide cursor-pointer ${partId ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-700 text-gray-400 cursor-not-allowed'}`}>
+                            <Upload className="w-5 h-5" /> Upload
+                            <input
+                              type="file"
+                              className="hidden"
+                              onChange={handleUploadFile}
+                              disabled={!partId}
+                              multiple
+                              accept="image/*,video/*,.stl,.obj,.3mf,.step,.stp,model/*,.iges,.igs"
+                            />
+                          </label>
                       </div>
+                     )}
+                     {isRunning && partId && (
+                      <p className="text-xs text-cyan-200">Dica: no upload, selecione várias imagens/arquivos de uma vez (Ctrl ou Shift no Windows).</p>
                      )}
                         
                         {isFinished && (
@@ -570,7 +695,7 @@ export const ProductionView: React.FC = () => {
 
         {/* Right Column - Technical Details Box */}
         <div className="lg:col-span-1">
-            <div className="border-2 border-dashed border-[#FFD700] rounded-lg p-6 bg-[#2e0249]/50 h-fit sticky top-6 shadow-2xl relative">
+          <div className="border-2 border-dashed border-[#FFD700] rounded-lg p-6 bg-[#2e0249]/50 h-fit shadow-2xl relative">
                 <h3 className="text-[#FFD700] text-2xl font-bold text-center mb-8 drop-shadow-md">Detalhes Técnicos</h3>
                 
                 <div className="space-y-8">
@@ -596,6 +721,102 @@ export const ProductionView: React.FC = () => {
                         )}
                     </div>
                 </div>
+            </div>
+
+            <div className="mt-6 border border-[#570a8a] rounded-lg p-4 bg-[#1b002b]/80 shadow-xl">
+              <h4 className="text-[#FFD700] font-bold mb-3 uppercase tracking-wide text-sm">Evolução da peça por setor</h4>
+              {partId && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMediaFilter('all')}
+                    className={`text-xs px-3 py-1 rounded border transition-colors ${mediaFilter === 'all' ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700] font-bold' : 'bg-transparent text-gray-300 border-[#570a8a] hover:bg-[#2e0249]'}`}
+                  >
+                    Ver todos os setores
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMediaFilter('current')}
+                    className={`text-xs px-3 py-1 rounded border transition-colors ${mediaFilter === 'current' ? 'bg-[#FFD700] text-[#2e0249] border-[#FFD700] font-bold' : 'bg-transparent text-gray-300 border-[#570a8a] hover:bg-[#2e0249]'}`}
+                  >
+                    Só setor atual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowProgressionModal(true)}
+                    className="text-xs px-3 py-1 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+                  >
+                    Ver Progressão
+                  </button>
+                </div>
+              )}
+              {partId && currentSector === 'CAD' && (
+                <p className="text-[11px] text-cyan-300 mb-3">Setor CAD: upload liberado para arquivos 3D (.stl, .obj, .3mf, .step, .stp, .iges, .igs).</p>
+              )}
+              {partId && latestImageAsset && (
+                <div className="mb-3 border border-cyan-700/60 rounded-md p-2 bg-cyan-900/20">
+                  <p className="text-[10px] text-cyan-200 uppercase tracking-wide mb-2">Última imagem enviada</p>
+                  <img src={latestImageAsset.dataUrl} alt={latestImageAsset.fileName} className="w-full h-28 object-cover rounded" />
+                  <p className="text-[10px] text-cyan-100 mt-1 truncate" title={latestImageAsset.fileName}>{latestImageAsset.fileName}</p>
+                </div>
+              )}
+              {!partId ? (
+                <p className="text-xs text-gray-400">Selecione uma peça para armazenar e visualizar imagens, vídeos e arquivos 3D.</p>
+              ) : filteredMediaAssets.length === 0 ? (
+                <p className="text-xs text-gray-400">Nenhuma evolução enviada para esta peça ainda.</p>
+              ) : (
+                <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                  {filteredMediaAssets.map(asset => {
+                    const isImage = asset.fileType.startsWith('image/');
+                    const isVideo = asset.fileType.startsWith('video/');
+                    const isModel = !isImage && !isVideo;
+
+                    return (
+                      <div key={asset.id} className="border border-[#570a8a] rounded-md p-2 bg-[#2e0249]">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {isImage && <ImageIcon className="w-4 h-4 text-cyan-300" />}
+                            {isVideo && <Film className="w-4 h-4 text-emerald-300" />}
+                            {isModel && <Cuboid className="w-4 h-4 text-amber-300" />}
+                            <p className="text-xs text-white truncate" title={asset.fileName}>{asset.fileName}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMedia(asset.id)}
+                            className="text-[10px] px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {asset.sector && <span className="text-[10px] px-2 py-1 rounded bg-indigo-900/70 text-indigo-200 border border-indigo-700">Setor: {asset.sector}</span>}
+                          {asset.uploadedBy && <span className="text-[10px] px-2 py-1 rounded bg-purple-900/70 text-purple-200 border border-purple-700">Usuário: {asset.uploadedBy}</span>}
+                          <span className="text-[10px] px-2 py-1 rounded bg-slate-800/70 text-slate-200 border border-slate-600">{new Date(asset.uploadedAt).toLocaleString('pt-BR')}</span>
+                        </div>
+
+                        {isImage && (
+                          <img src={asset.dataUrl} alt={asset.fileName} className="w-full h-28 object-cover rounded" />
+                        )}
+
+                        {isVideo && (
+                          <video src={asset.dataUrl} controls className="w-full rounded" />
+                        )}
+
+                        {isModel && (
+                          <a
+                            href={asset.dataUrl}
+                            download={asset.fileName}
+                            className="text-xs text-cyan-300 underline"
+                          >
+                            Baixar arquivo 3D
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
         </div>
       </div>
@@ -660,6 +881,81 @@ export const ProductionView: React.FC = () => {
                   Nova Produção
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Full Progression Modal */}
+      {showProgressionModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-[#2e0249] border-2 border-cyan-400 rounded-lg shadow-2xl max-w-3xl w-full animate-in zoom-in duration-300 overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-[#570a8a]">
+              <h3 className="text-cyan-300 text-lg font-bold">Progressão Completa da Peça</h3>
+              <button
+                onClick={() => setShowProgressionModal(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="p-4 max-h-[70vh] overflow-y-auto">
+              {!partId ? (
+                <p className="text-gray-300">Selecione uma peça para visualizar a progressão completa.</p>
+              ) : mediaAssets.length === 0 ? (
+                <p className="text-gray-300">Nenhum upload registrado para esta peça.</p>
+              ) : (
+                <div className="space-y-3">
+                  {progressionGroupedBySector.map(([sectorName, assets]) => (
+                    <div key={`group-${sectorName}`} className="border border-[#570a8a] rounded-md p-3 bg-[#1b002b]">
+                      <button
+                        type="button"
+                        onClick={() => setCollapsedSectors(prev => ({ ...prev, [sectorName]: !prev[sectorName] }))}
+                        className="w-full flex items-center justify-between text-left mb-2"
+                      >
+                        <h4 className="text-sm font-bold text-[#FFD700] uppercase tracking-wide">{sectorName} ({assets.length})</h4>
+                        {collapsedSectors[sectorName] ? <ChevronRight className="w-4 h-4 text-[#FFD700]" /> : <ChevronDown className="w-4 h-4 text-[#FFD700]" />}
+                      </button>
+                      {!collapsedSectors[sectorName] && <div className="space-y-3">
+                        {assets.map(asset => {
+                          const isImage = asset.fileType.startsWith('image/');
+                          const isVideo = asset.fileType.startsWith('video/');
+                          const isModel = !isImage && !isVideo;
+
+                          return (
+                            <div key={`progress-${asset.id}`} className="border border-[#570a8a] rounded-md p-3 bg-[#2e0249]">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                {asset.uploadedBy && <span className="text-[10px] px-2 py-1 rounded bg-purple-900/70 text-purple-200 border border-purple-700">Usuário: {asset.uploadedBy}</span>}
+                                <span className="text-[10px] px-2 py-1 rounded bg-slate-800/70 text-slate-200 border border-slate-600">{new Date(asset.uploadedAt).toLocaleString('pt-BR')}</span>
+                              </div>
+
+                              <p className="text-xs text-white mb-2" title={asset.fileName}>{asset.fileName}</p>
+
+                              {isImage && <img src={asset.dataUrl} alt={asset.fileName} className="w-full max-h-64 object-contain rounded bg-black/20" />}
+                              {isVideo && <video src={asset.dataUrl} controls className="w-full rounded" />}
+                              {isModel && (
+                                <a href={asset.dataUrl} download={asset.fileName} className="text-sm text-cyan-300 underline">
+                                  Baixar arquivo 3D
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end">
+              <button
+                onClick={() => setShowProgressionModal(false)}
+                className="px-4 py-2 rounded border border-[#570a8a] text-gray-300 hover:text-white hover:bg-[#3c0360] transition-colors"
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>

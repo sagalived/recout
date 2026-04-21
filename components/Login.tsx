@@ -32,7 +32,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onRegisterClick }) => {
         {/* Header / Logo area */}
         <div className="text-center mb-8">
           <h1 className="text-4xl md:text-5xl font-bold text-[#FFD700] tracking-widest uppercase drop-shadow-lg mb-2">
-            RECOUT
+            GESTÃO DE PRODUÇÃO
           </h1>
           <p className="text-white text-[10px] md:text-xs uppercase tracking-widest font-bold opacity-90">
             SISTEMA DE GESTÃO INTEGRADO
@@ -118,7 +118,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onRegisterClick }) => {
           
           <div className="pb-6 pt-0 text-center px-4">
             <p className="text-purple-300/70 text-[10px] font-medium">
-              &copy; 2025 Recout Systems. Todos os direitos reservados.
+              &copy; 2026 Gestão de Produção. Todos os direitos reservados.
             </p>
           </div>
         </div>
