@@ -13,6 +13,7 @@ import { Login } from './components/Login';
 import { Register } from './components/Register';
 import { PersistedSystemState, systemStore } from './services/storage';
 import { ActiveView } from './types/activeView';
+import { UserCircle } from 'lucide-react';
 
 const mobileNavItems = [
   { id: ActiveView.DASHBOARD, label: 'Visão Geral' },
@@ -197,16 +198,34 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#4a148c] p-3 md:p-8">
         <div className="md:hidden bg-[#2e0249] border border-[#570a8a] rounded-xl p-3 mb-3 shadow-lg">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <h1 className="text-[#FFD700] font-bold text-base uppercase tracking-wide">Gestão de Produção</h1>
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-3 mb-3">
+            <div className="flex items-center justify-between gap-3">
+              <h1 className="text-[#FFD700] font-bold text-base uppercase tracking-wide">Gestão de Produção</h1>
               <span className={`text-[10px] px-2 py-1 rounded border ${cloudSyncStatus === 'ok' ? 'border-emerald-500 text-emerald-300' : cloudSyncStatus === 'syncing' ? 'border-amber-500 text-amber-300' : 'border-red-500 text-red-300'}`}>
                 {cloudSyncStatus === 'ok' ? 'Nuvem OK' : cloudSyncStatus === 'syncing' ? 'Sincronizando' : 'Sem Nuvem'}
               </span>
+            </div>
+            
+            <div className="flex items-center justify-between bg-[#3c0360] p-2 rounded-lg border border-[#570a8a]">
+              {(() => {
+                const user = systemStore.getCurrentUser();
+                return user ? (
+                  <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
+                    {user.avatar ? (
+                      <img src={user.avatar} alt={user.name} className="w-8 h-8 rounded-full object-cover border border-[#FFD700]" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-[#2e0249] border border-[#FFD700] flex items-center justify-center text-[#FFD700]">
+                        <UserCircle className="w-5 h-5" />
+                      </div>
+                    )}
+                    <span className="text-sm font-bold text-[#FFD700] truncate">{user.name}</span>
+                  </div>
+                ) : <div className="flex-1"></div>;
+              })()}
               <button
                 type="button"
                 onClick={handleLogout}
-                className="text-xs font-bold text-[#FFD700] border border-[#570a8a] px-3 py-1.5 rounded-md"
+                className="text-xs font-bold text-[#FFD700] border border-[#570a8a] px-3 py-1.5 rounded-md hover:bg-[#570a8a] transition-colors"
               >
                 Sair
               </button>

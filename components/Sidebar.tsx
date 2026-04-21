@@ -1,6 +1,7 @@
 import React from 'react';
 import { ActiveView } from '../types/activeView';
 import { Users, UserCircle, Package, Layers, LogOut, LayoutDashboard, HelpCircle, Factory } from 'lucide-react';
+import { systemStore } from '../services/storage';
 
 interface SidebarProps {
   activeView: ActiveView;
@@ -75,7 +76,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, onL
         ))}
       </nav>
 
-      <div className="p-4 border-t border-[#570a8a]">
+      <div className="p-4 border-t border-[#570a8a] bg-[#220138]">
+        {(() => {
+          const user = systemStore.getCurrentUser();
+          return user ? (
+            <div className="flex items-center gap-3 mb-4 px-2">
+              {user.avatar ? (
+                <img src={user.avatar} alt={user.name} className="w-10 h-10 rounded-full object-cover border-2 border-[#FFD700]" />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-[#3c0360] border-2 border-[#FFD700] flex items-center justify-center text-[#FFD700]">
+                  <UserCircle className="w-6 h-6" />
+                </div>
+              )}
+              <div className="flex flex-col overflow-hidden">
+                <span className="text-sm font-bold text-[#FFD700] truncate">{user.name}</span>
+                <span className="text-xs text-purple-300 truncate">{user.sector}</span>
+              </div>
+            </div>
+          ) : null;
+        })()}
         <button 
           onClick={onLogout}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-[#570a8a] rounded-lg text-[#FFD700] hover:bg-[#570a8a] transition-colors font-semibold"
