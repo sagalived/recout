@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Clock, Activity, Users, Package, TrendingUp, AlertCircle, Calendar, X, BarChart, List, CheckCircle, Timer } from 'lucide-react';
-import { ActiveView } from '../App';
-import { systemStore, Employee, Client, ProductionEntry } from '../services/storage';
+import { Clock, Activity, Users, Package, AlertCircle, Calendar, X, BarChart, List, CheckCircle, Timer } from 'lucide-react';
+import { ActiveView } from '../types/activeView';
+import { systemStore, Employee, Client, ProductionEntry, DeliveryAlert } from '../services/storage';
 
 interface DashboardProps {
   onChangeView: (view: ActiveView) => void;
@@ -22,9 +22,15 @@ interface LiveProductionUI {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
   const [liveProduction, setLiveProduction] = useState<LiveProductionUI[]>([]);
+    const [productionEntries, setProductionEntries] = useState<ProductionEntry[]>([]);
   const [sectorStats, setSectorStats] = useState<any[]>([]);
   const [totalDailyProduction, setTotalDailyProduction] = useState(0);
+    const [totalInProcess, setTotalInProcess] = useState(0);
   const [loading, setLoading] = useState(true);
+    const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
+    const [showFullTimelineModal, setShowFullTimelineModal] = useState(false);
+    const [deliveryAlerts, setDeliveryAlerts] = useState<DeliveryAlert[]>([]);
+    const [refreshTick, setRefreshTick] = useState(0);
   
   // Modals State
   const [showMonthlyModal, setShowMonthlyModal] = useState(false);
@@ -35,16 +41,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
   const [allClients, setAllClients] = useState<Client[]>([]);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
   const [allProduction, setAllProduction] = useState<ProductionEntry[]>([]);
-
-  // Mock Client Orders (can be moved to storage later)
-  const [clientOrders] = useState([
-    { id: '101', client: 'Padaria Pão Dourado', orderRef: 'PED-2023-001', totalItems: 500, completedItems: 350, status: 'Em Produção', deadline: '15/11' },
-    { id: '102', client: 'Malharia Têxtil Sul', orderRef: 'PED-2023-005', totalItems: 1000, completedItems: 120, status: 'Atrasado', deadline: '10/11' },
-    { id: '103', client: 'João da Silva', orderRef: 'PED-2023-008', totalItems: 50, completedItems: 45, status: 'Finalizando', deadline: '12/11' },
-  ]);
+    const [showEmployeeHistoryModal, setShowEmployeeHistoryModal] = useState(false);
+    const [employeeHistoryTitle, setEmployeeHistoryTitle] = useState('');
+    const [employeeHistoryRows, setEmployeeHistoryRows] = useState<Array<{processId: string; partCode: string; partName: string; sector: string; durationSeconds: number; endedAt: number;}>>([]);
 
   // Update Loop
-  useEffect(() => {
+    useEffect(() => {
     const updateData = () => {
       const rawProduction = systemStore.getProduction();
       const stats = systemStore.getSectorStats();
@@ -71,16 +73,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             currentSector: p.currentSector,
             dailyCount: dynamicDailyCount,
             status: p.status,
-            elapsedSeconds: Math.floor((Date.now() - p.startTime) / 1000)
+            elapsedSeconds: Math.floor((Date.now() - (p.sectorStartTime || p.startTime)) / 1000)
         };
       }).filter(p => p.status === 'working' || p.status === 'paused'); // Only show active
+
+    setTotalInProcess(rawProduction.filter(p => p.status === 'working' || p.status === 'paused').length);
 
       // Sort by most recent (lowest elapsed time usually means just started, or reverse)
       uiProduction.sort((a, b) => a.elapsedSeconds - b.elapsedSeconds);
 
+            setProductionEntries(rawProduction);
       setLiveProduction(uiProduction);
       setSectorStats(stats);
+            setDeliveryAlerts(systemStore.getPendingDeliveryAlerts());
       setLoading(false);
+
+            // Clear selection if process is no longer available.
+            if (selectedProcessId && !rawProduction.some(p => p.id === selectedProcessId)) {
+                setSelectedProcessId(null);
+            }
     };
 
     // Initial call
@@ -90,7 +101,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     const interval = setInterval(updateData, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+    }, [selectedProcessId, refreshTick]);
 
   const handleOpenMonthlyReport = () => {
       const employees = systemStore.getEmployees();
@@ -112,6 +123,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     setShowDetailsModal(true);
   };
 
+    const handleOpenEmployeeHistory = (employeeName: string) => {
+        const rows = systemStore.getEmployeeProcessHistory(employeeName);
+        setEmployeeHistoryTitle(employeeName);
+        setEmployeeHistoryRows(rows);
+        setShowEmployeeHistoryModal(true);
+    };
+
+    useEffect(() => {
+        if (!showDetailsModal) return;
+
+        const syncDetailsData = () => {
+            setAllClients(systemStore.getClients());
+            setAllEmployees(systemStore.getEmployees());
+            setAllProduction(systemStore.getProduction());
+        };
+
+        syncDetailsData();
+        const interval = setInterval(syncDetailsData, 1000);
+
+        return () => clearInterval(interval);
+    }, [showDetailsModal]);
+
   // Format Seconds to HH:MM:SS
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -120,7 +153,69 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const totalWIP = sectorStats.reduce((acc: number, curr: any) => acc + curr.count, 0);
+    const getSectorTimesWithCurrent = (entry: ProductionEntry): Record<string, number> => {
+        const merged = { ...(entry.sectorTimes || {}) };
+        if (entry.status === 'working') {
+            const startRef = entry.sectorStartTime || entry.startTime;
+            const elapsedCurrent = Math.max(0, Math.floor((Date.now() - startRef) / 1000));
+            merged[entry.currentSector] = (merged[entry.currentSector] || 0) + elapsedCurrent;
+        }
+        return merged;
+    };
+
+    const getTotalProcessSeconds = (entry: ProductionEntry): number => {
+        const sectorTimes = getSectorTimesWithCurrent(entry);
+        return Object.values(sectorTimes).reduce((sum, value) => sum + value, 0);
+    };
+
+    const formatDateTime = (timestamp: number) => {
+        return new Date(timestamp).toLocaleString('pt-BR');
+    };
+
+    const buildProcessTimeline = (entry: ProductionEntry) => {
+        const sectorTimes = getSectorTimesWithCurrent(entry);
+        const sectorsInOrder = systemStore.getSectors().map(s => s.name);
+        const timeline: Array<{ sector: string; startedAt: number; endedAt: number | null; duration: number; isCurrent: boolean }> = [];
+        let cursor = entry.startTime;
+
+        sectorsInOrder.forEach(sector => {
+            const duration = sectorTimes[sector] || 0;
+            if (duration <= 0) return;
+
+            const startedAt = cursor;
+            const isCurrent = entry.status === 'working' && sector === entry.currentSector;
+            const endedAt = isCurrent ? null : startedAt + duration * 1000;
+
+            timeline.push({ sector, startedAt, endedAt, duration, isCurrent });
+            cursor = startedAt + duration * 1000;
+        });
+
+        return timeline;
+    };
+
+    const selectedProcess = selectedProcessId ? productionEntries.find(p => p.id === selectedProcessId) || null : null;
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+
+    const handleMarkAsDelivered = (alertId: string) => {
+        const confirmed = window.confirm('Tem certeza que deseja marcar esta peça como entregue?');
+        if (!confirmed) return;
+
+        systemStore.markDeliveryAlertAsDelivered(alertId);
+        setDeliveryAlerts(systemStore.getPendingDeliveryAlerts());
+    };
+
+    const handleDeleteProcess = (processId: string) => {
+        if (!isAdmin) return;
+
+        const confirmed = window.confirm('Tem certeza que deseja excluir este processo? Isso apagará todo o histórico e dados da peça vinculada.');
+        if (!confirmed) return;
+
+        systemStore.deleteProcessCompletely(processId);
+        setShowFullTimelineModal(false);
+        setSelectedProcessId(null);
+        setRefreshTick(prev => prev + 1);
+    };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -161,7 +256,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             </div>
             <div className="bg-[#1b002b] border border-[#570a8a] rounded-lg px-4 py-2 text-center min-w-[120px]">
                 <span className="block text-xs text-purple-300 uppercase font-bold">Total em Processo</span>
-                <span className="text-xl font-bold text-[#FFD700]">{totalWIP} <span className="text-xs font-normal text-white/50">peças</span></span>
+                <span className="text-xl font-bold text-[#FFD700]">{totalInProcess} <span className="text-xs font-normal text-white/50">peças</span></span>
             </div>
         </div>
       </div>
@@ -170,6 +265,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
         
         {/* Left Column: Live Employee Monitor (2/3 width on large screens) */}
         <div className="xl:col-span-2 space-y-6">
+            {deliveryAlerts.length > 0 && (
+                <div className="bg-amber-900/40 border border-amber-400 rounded-lg p-4 animate-pulse">
+                    <p className="text-amber-200 font-bold uppercase text-sm tracking-wide">
+                        Alerta: {deliveryAlerts.length} peça(s) pronta(s) para entrega ao cliente.
+                    </p>
+                </div>
+            )}
             
             {/* Live Activity Header */}
             <div className="flex items-center justify-between border-b border-[#FFD700]/30 pb-2">
@@ -190,7 +292,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {liveProduction.map((item) => (
-                        <div key={item.id} className={`bg-[#1b002b] border-l-4 ${item.status === 'working' ? 'border-emerald-500' : 'border-amber-500'} rounded-r-lg shadow-lg p-4 relative overflow-hidden group hover:bg-[#2e0249] transition-colors`}>
+                        <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedProcessId(item.id)}
+                            className={`w-full text-left bg-[#1b002b] border-l-4 ${item.status === 'working' ? 'border-emerald-500' : 'border-amber-500'} rounded-r-lg shadow-lg p-4 relative overflow-hidden group hover:bg-[#2e0249] transition-colors ${selectedProcessId === item.id ? 'ring-2 ring-[#FFD700]' : ''}`}
+                        >
                             <div className="flex justify-between items-start mb-3">
                                 <div className="flex items-center gap-3">
                                     <div className="w-12 h-12 rounded-full bg-[#4a148c] border border-purple-500 flex items-center justify-center overflow-hidden">
@@ -237,69 +344,105 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                                     </span>
                                 )}
                             </div>
-                        </div>
+                        </button>
                     ))}
                 </div>
             )}
 
-            {/* Client Orders Table */}
-            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] p-5 mt-8">
-                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-[#FFD700]" />
-                    Pedidos em Produção
-                </h3>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead className="text-xs text-purple-300 uppercase bg-[#2e0249]">
-                            <tr>
-                                <th className="p-3">Cliente / Pedido</th>
-                                <th className="p-3 text-center">Progresso</th>
-                                <th className="p-3 text-center">Prazo</th>
-                                <th className="p-3 text-center">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#570a8a]/30 text-sm">
-                            {clientOrders.map(order => {
-                                const percentage = Math.round((order.completedItems / order.totalItems) * 100);
-                                return (
-                                    <tr key={order.id} className="hover:bg-[#2e0249]/50">
-                                        <td className="p-3">
-                                            <div className="font-bold text-white">{order.client}</div>
-                                            <div className="text-xs text-gray-400">{order.orderRef}</div>
-                                        </td>
-                                        <td className="p-3">
-                                            <div className="flex items-center gap-2">
-                                                <div className="flex-1 bg-gray-700 rounded-full h-2">
-                                                    <div 
-                                                        className={`h-2 rounded-full ${percentage > 80 ? 'bg-emerald-500' : percentage > 40 ? 'bg-blue-500' : 'bg-amber-500'}`} 
-                                                        style={{ width: `${percentage}%` }}
-                                                    ></div>
-                                                </div>
-                                                <span className="text-xs font-mono text-white w-8 text-right">{percentage}%</span>
-                                            </div>
-                                            <div className="text-[10px] text-gray-500 text-center mt-1">
-                                                {order.completedItems} / {order.totalItems} peças
-                                            </div>
-                                        </td>
-                                        <td className="p-3 text-center text-gray-300 font-mono">
-                                            {order.deadline}
-                                        </td>
-                                        <td className="p-3 text-center">
-                                            <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
-                                                order.status === 'Atrasado' ? 'bg-red-900/50 text-red-400' :
-                                                order.status === 'Finalizando' ? 'bg-emerald-900/50 text-emerald-400' :
-                                                'bg-blue-900/50 text-blue-400'
-                                            }`}>
-                                                {order.status}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+            {selectedProcess && (
+                <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] p-5 mt-6">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                        <Timer className="w-5 h-5 text-[#FFD700]" />
+                        Histórico Detalhado do Processo
+                    </h3>
+
+                    <div className="mb-4 flex justify-end">
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowFullTimelineModal(true)}
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-md shadow transition-colors font-bold uppercase tracking-wide"
+                            >
+                                Ver Histórico Completo
+                            </button>
+                            {isAdmin && (
+                                <button
+                                    type="button"
+                                    onClick={() => handleDeleteProcess(selectedProcess.id)}
+                                    className="bg-red-700 hover:bg-red-600 text-white text-xs px-4 py-2 rounded-md shadow transition-colors font-bold uppercase tracking-wide"
+                                >
+                                    Excluir Processo
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                        <div className="bg-[#2e0249] rounded-md p-3 border border-[#570a8a]">
+                            <p className="text-xs text-purple-300 uppercase">ID Processo</p>
+                            <p className="text-white font-mono font-bold mt-1">{selectedProcess.id}</p>
+                        </div>
+                        <div className="bg-[#2e0249] rounded-md p-3 border border-[#570a8a]">
+                            <p className="text-xs text-purple-300 uppercase">Peça</p>
+                            <p className="text-white font-bold mt-1">{selectedProcess.partName} <span className="text-purple-300 font-mono">({selectedProcess.partCode})</span></p>
+                        </div>
+                        <div className="bg-[#2e0249] rounded-md p-3 border border-[#570a8a]">
+                            <p className="text-xs text-purple-300 uppercase">Tempo Total Gasto</p>
+                            <p className="text-[#FFD700] font-mono font-bold mt-1 text-lg">{formatTime(getTotalProcessSeconds(selectedProcess))}</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-[#2e0249] rounded-md border border-[#570a8a] overflow-hidden">
+                        <table className="w-full text-left">
+                            <thead className="bg-[#3c0360] text-xs uppercase text-gray-300">
+                                <tr>
+                                    <th className="p-3">Setor</th>
+                                    <th className="p-3 text-right">Tempo no Setor</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#570a8a]/40 text-sm">
+                                {systemStore.getSectors().map(sector => {
+                                    const bySector = getSectorTimesWithCurrent(selectedProcess);
+                                    const value = bySector[sector.name] || 0;
+                                    if (value <= 0) return null;
+
+                                    return (
+                                        <tr key={sector.id}>
+                                            <td className="p-3 text-white">{sector.name}</td>
+                                            <td className="p-3 text-right text-cyan-300 font-mono">{formatTime(value)}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-            </div>
+            )}
+
+            {deliveryAlerts.length > 0 && (
+                <div className="bg-[#1b002b] rounded-lg border border-amber-500/60 p-5 mt-6">
+                    <h3 className="text-lg font-bold text-amber-300 mb-4 uppercase tracking-wide">Peças prontas para entrega</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {deliveryAlerts.map(alert => (
+                            <div key={alert.id} className="bg-amber-900/30 border border-amber-400 rounded-md p-3 animate-pulse">
+                                <p className="text-white font-bold">{alert.partName}</p>
+                                <p className="text-xs text-amber-200 mt-1">Processo: {alert.processId} | Peça: {alert.partCode}</p>
+                                <p className="text-xs text-amber-100 mt-1">Cliente: {alert.clientName}</p>
+                                                                <p className="text-xs text-amber-100 mt-1">Telefone: {alert.clientContact || 'Nao informado'}</p>
+                                                                <p className="text-xs text-amber-100 mt-1">Email: {alert.clientEmail || 'Nao informado'}</p>
+                                <p className="text-[11px] text-amber-300 mt-2 font-semibold uppercase">Pronta para entrega</p>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleMarkAsDelivered(alert.id)}
+                                                                    className="mt-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded font-bold transition-colors uppercase"
+                                                                >
+                                                                    Marcar como entregue
+                                                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
         </div>
 
@@ -341,22 +484,94 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
 
                 <div className="mt-10 border-t border-[#570a8a] pt-6">
                     <h4 className="text-sm font-bold text-white mb-4">Eficiência Média (Semana)</h4>
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs text-gray-400">Corte</span>
-                        <span className="text-xs text-emerald-400 font-bold">+12%</span>
-                    </div>
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs text-gray-400">Costura</span>
-                        <span className="text-xs text-red-400 font-bold">-5%</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-xs text-gray-400">Montagem</span>
-                        <span className="text-xs text-emerald-400 font-bold">+3%</span>
-                    </div>
+                    <p className="text-xs text-gray-400">Sem dados suficientes para calcular eficiência.</p>
                 </div>
             </div>
         </div>
       </div>
+
+            {showFullTimelineModal && selectedProcess && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-[#2e0249] border border-[#FFD700] rounded-xl shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+                        <div className="p-5 border-b border-[#570a8a] flex justify-between items-center bg-[#4a148c]">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Timer className="w-5 h-5 text-[#FFD700]" />
+                                Histórico Completo - Processo {selectedProcess.id}
+                            </h3>
+                            <button
+                                onClick={() => setShowFullTimelineModal(false)}
+                                className="text-gray-400 hover:text-white transition-colors"
+                            >
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="p-4 overflow-y-auto">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                                <div className="bg-[#1b002b] rounded-md p-3 border border-[#570a8a]">
+                                    <p className="text-xs text-purple-300 uppercase">Tempo Total</p>
+                                    <p className="text-[#FFD700] font-mono font-bold text-lg mt-1">{formatTime(getTotalProcessSeconds(selectedProcess))}</p>
+                                </div>
+                                <div className="bg-[#1b002b] rounded-md p-3 border border-[#570a8a]">
+                                    <p className="text-xs text-purple-300 uppercase">Setor Atual</p>
+                                    <p className="text-white font-bold mt-1">{selectedProcess.currentSector}</p>
+                                </div>
+                                <div className={`rounded-md p-3 border ${selectedProcess.status === 'finished' ? 'bg-emerald-900/30 border-emerald-500/50' : 'bg-cyan-900/30 border-cyan-500/50'}`}>
+                                    <p className="text-xs text-purple-300 uppercase">Status</p>
+                                    <div className="mt-1 flex items-center gap-2">
+                                        {selectedProcess.status === 'finished' ? (
+                                            <CheckCircle className="w-4 h-4 text-emerald-300" />
+                                        ) : (
+                                            <Activity className="w-4 h-4 text-cyan-300" />
+                                        )}
+                                        <p className={`font-bold ${selectedProcess.status === 'finished' ? 'text-emerald-300' : 'text-cyan-300'}`}>
+                                            {selectedProcess.status === 'finished' ? 'Finalizado' : 'Em andamento'}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] overflow-hidden">
+                                <table className="w-full text-left">
+                                    <thead className="bg-[#3c0360] text-gray-300 text-xs uppercase">
+                                        <tr>
+                                            <th className="p-3">Setor</th>
+                                            <th className="p-3">Entrada</th>
+                                            <th className="p-3">Saída</th>
+                                            <th className="p-3 text-right">Tempo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#570a8a]/50 text-sm">
+                                        {buildProcessTimeline(selectedProcess).length === 0 ? (
+                                            <tr>
+                                                <td colSpan={4} className="p-4 text-center text-gray-400">Sem histórico de setores para este processo.</td>
+                                            </tr>
+                                        ) : (
+                                            buildProcessTimeline(selectedProcess).map((row, idx) => (
+                                                <tr key={`${row.sector}-${idx}`} className="hover:bg-[#2e0249]">
+                                                    <td className="p-3 text-white font-medium">{row.sector}</td>
+                                                    <td className="p-3 text-gray-300 font-mono text-xs">{formatDateTime(row.startedAt)}</td>
+                                                    <td className="p-3 text-gray-300 font-mono text-xs">{row.endedAt ? formatDateTime(row.endedAt) : 'Em andamento'}</td>
+                                                    <td className="p-3 text-right text-cyan-300 font-mono">{formatTime(row.duration)}</td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end">
+                            <button
+                                onClick={() => setShowFullTimelineModal(false)}
+                                className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold transition-colors"
+                            >
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
       {/* Monthly Report Modal */}
       {showMonthlyModal && (
@@ -396,9 +611,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                                         </td>
                                         <td className="p-3 text-sm text-gray-400">{stat.sector}</td>
                                         <td className="p-3 text-right">
-                                            <span className="bg-emerald-900/50 text-emerald-400 px-2 py-1 rounded font-bold font-mono">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenEmployeeHistory(stat.name)}
+                                              className="bg-emerald-900/50 hover:bg-emerald-800/60 text-emerald-400 px-2 py-1 rounded font-bold font-mono transition-colors"
+                                              title="Clique para ver o histórico das peças tratadas"
+                                            >
                                                 {stat.count}
-                                            </span>
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
@@ -616,6 +836,64 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             </div>
         </div>
       )}
+
+            {showEmployeeHistoryModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-[#2e0249] border border-[#FFD700] rounded-xl shadow-2xl max-w-4xl w-full max-h-[80vh] flex flex-col overflow-hidden">
+                        <div className="p-5 border-b border-[#570a8a] flex justify-between items-center bg-[#4a148c]">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Timer className="w-5 h-5 text-[#FFD700]" />
+                                Histórico de Peças Tratadas - {employeeHistoryTitle}
+                            </h3>
+                            <button onClick={() => setShowEmployeeHistoryModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] overflow-hidden">
+                                <table className="w-full text-left">
+                                    <thead className="bg-[#3c0360] text-gray-300 text-xs uppercase">
+                                        <tr>
+                                            <th className="p-3">Processo</th>
+                                            <th className="p-3">Peça</th>
+                                            <th className="p-3">Setor Tratado</th>
+                                            <th className="p-3 text-right">Tempo Gasto</th>
+                                            <th className="p-3 text-right">Finalizado em</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#570a8a]/50 text-sm">
+                                        {employeeHistoryRows.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={5} className="p-4 text-center text-gray-400">Nenhum tratamento de peça registrado para este funcionário no mês.</td>
+                                            </tr>
+                                        ) : (
+                                            employeeHistoryRows.map((row, index) => (
+                                                <tr key={`${row.processId}-${row.partCode}-${index}`} className="hover:bg-[#2e0249]">
+                                                    <td className="p-3 text-cyan-300 font-mono">{row.processId}</td>
+                                                    <td className="p-3 text-white">
+                                                        {row.partName}
+                                                        <div className="text-xs text-gray-500 font-mono">{row.partCode}</div>
+                                                    </td>
+                                                    <td className="p-3 text-[#FFD700]">{row.sector}</td>
+                                                    <td className="p-3 text-right text-emerald-300 font-mono">{formatTime(row.durationSeconds)}</td>
+                                                    <td className="p-3 text-right text-gray-400 font-mono text-xs">{new Date(row.endedAt).toLocaleString('pt-BR')}</td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end">
+                            <button onClick={() => setShowEmployeeHistoryModal(false)} className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold transition-colors">
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
     </div>
   );

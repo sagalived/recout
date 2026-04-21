@@ -1,9 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 export const generateProjectRecoveryPlan = async (userDescription: string): Promise<string> => {
   try {
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('VITE_GEMINI_API_KEY nao configurada.');
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+
     const prompt = `
       Você é um Engenheiro de Software Senior Especialista em React.
       O usuário perdeu um código que criou ontem e está descrevendo o que lembra dele.

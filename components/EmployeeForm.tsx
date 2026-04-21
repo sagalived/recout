@@ -248,15 +248,11 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
               className="w-full bg-[#2e0249] border-none rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none shadow-inner appearance-none"
             >
               <option value="">Selecione...</option>
-              <option value="Administração">Administração</option>
-              <option value="Vendas">Vendas</option>
-              <option value="TI">TI</option>
-              <option value="Produção">Produção</option>
-              <option value="Montagem Final">Montagem Final</option>
-              <option value="Costura">Costura</option>
-              <option value="Corte">Corte</option>
-              <option value="Bordado">Bordado</option>
               <option value="Triagem">Triagem</option>
+              <option value="CAD">CAD</option>
+              <option value="CAM">CAM</option>
+              <option value="Freezagem">Freezagem</option>
+              <option value="Acabamento">Acabamento</option>
             </select>
           </div>
           <div className="hidden md:block"></div> {/* Spacer to fill grid */}

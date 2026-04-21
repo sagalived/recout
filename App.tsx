@@ -12,19 +12,7 @@ import { Faq } from './components/Faq';
 import { Login } from './components/Login';
 import { Register } from './components/Register';
 import { systemStore } from './services/storage';
-
-export enum ActiveView {
-  LOGIN = 'LOGIN',
-  REGISTER = 'REGISTER',
-  DASHBOARD = 'DASHBOARD',
-  EMPLOYEE = 'EMPLOYEE',
-  CLIENT = 'CLIENT',
-  PRODUCT = 'PRODUCT',
-  SECTOR = 'SECTOR',
-  PRODUCTION = 'PRODUCTION',
-  RECOVERY = 'RECOVERY',
-  FAQ = 'FAQ'
-}
+import { ActiveView } from './types/activeView';
 
 export default function App() {
   const [activeView, setActiveView] = useState<ActiveView>(ActiveView.LOGIN);

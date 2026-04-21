@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { Factory, Play, CheckCircle, RotateCcw, X, ChevronRight, Box, Users } from 'lucide-react';
-import { systemStore, Product, Employee, ProductionSession } from '../services/storage';
+import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle } from 'lucide-react';
+import { systemStore, Product, ProductionEntry, ProductionSession } from '../services/storage';
 
 export const ProductionView: React.FC = () => {
   // Load data from store
@@ -28,8 +28,54 @@ export const ProductionView: React.FC = () => {
   const [stopTime, setStopTime] = useState<number | null>(null);
 
   // Modal State
-  const [showSectorModal, setShowSectorModal] = useState<'current' | 'next' | null>(null);
   const [showPartModal, setShowPartModal] = useState(false);
+  const [showProcessModal, setShowProcessModal] = useState(false);
+  const [activeProductions, setActiveProductions] = useState<ProductionEntry[]>([]);
+  const [loadedProductionId, setLoadedProductionId] = useState('');
+
+  const getNextSectorInFlow = (sector: string, sectors: string[]) => {
+    const currentIndex = sectors.findIndex(s => s === sector);
+    if (currentIndex === -1 || currentIndex >= sectors.length - 1) return '';
+    return sectors[currentIndex + 1];
+  };
+
+  const getPreviousSectorInFlow = (sector: string, sectors: string[]) => {
+    const currentIndex = sectors.findIndex(s => s === sector);
+    if (currentIndex <= 0) return '';
+    return sectors[currentIndex - 1];
+  };
+
+  const refreshActiveProductions = (viewer?: { name?: string; sector?: string; isAdmin?: boolean }) => {
+    const allActive = systemStore.getActiveProductions();
+    if (viewer?.isAdmin) {
+      setActiveProductions(allActive);
+      return;
+    }
+
+    if (viewer?.sector) {
+      setActiveProductions(allActive.filter(p => p.currentSector === viewer.sector));
+      return;
+    }
+
+    setActiveProductions([]);
+  };
+
+  const clearPanelForNextWork = () => {
+    const triagem = availableSectors.find(s => s.toLowerCase() === 'triagem') || availableSectors[0] || '';
+    setPartId('');
+    setPartName('');
+    setClientName('');
+    setCurrentSector(triagem);
+    setNextSector(getNextSectorInFlow(triagem, availableSectors));
+    setLoadedProductionId('');
+    setProcessId('');
+    setIsRunning(false);
+    setIsFinished(false);
+    setElapsedTime(0);
+    setStartTime(0);
+    setStopTime(null);
+    systemStore.clearCurrentSession();
+  };
 
   // Initialization & Persistence Restoration
   useEffect(() => {
@@ -42,10 +88,16 @@ export const ProductionView: React.FC = () => {
 
     // Lock to Current User
     const currentUser = systemStore.getCurrentUser();
+    const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+    const triagem = sectors.find(s => s.toLowerCase() === 'triagem') || sectors[0] || '';
+    const nextFromTriagem = getNextSectorInFlow(triagem, sectors);
+
     if (currentUser) {
-        setEmployeeName(currentUser.name);
-        setCurrentSector(currentUser.sector); // Default to user's sector
-        setSelectedAvatar(currentUser.avatar);
+      setEmployeeName(currentUser.name);
+      setCurrentSector(triagem); // Setor inicial sempre Triagem
+      setNextSector(nextFromTriagem);
+      setSelectedAvatar(currentUser.avatar);
+      refreshActiveProductions({ name: currentUser.name, sector: currentUser.sector, isAdmin: isAdminUser });
     }
 
     // Check for active session
@@ -58,8 +110,10 @@ export const ProductionView: React.FC = () => {
              setClientName(savedSession.clientName);
              setPartName(savedSession.partName);
              setPartId(savedSession.partId);
-             setCurrentSector(savedSession.currentSector);
-             setNextSector(savedSession.nextSector);
+             setLoadedProductionId(savedSession.processId || savedSession.partId);
+             const safeCurrentSector = savedSession.currentSector || triagem;
+             setCurrentSector(safeCurrentSector);
+             setNextSector(getNextSectorInFlow(safeCurrentSector, sectors));
              setProcessId(savedSession.processId);
              setIsRunning(savedSession.isRunning);
              setIsFinished(savedSession.isFinished);
@@ -68,7 +122,7 @@ export const ProductionView: React.FC = () => {
 
             // Recalculate elapsed time instantly
             if (savedSession.isRunning) {
-                setElapsedTime(Math.floor((Date.now() - savedSession.startTime) / 1000));
+              setElapsedTime(Math.floor((Date.now() - savedSession.startTime) / 1000));
             } else if (savedSession.isFinished && savedSession.stopTime) {
                 setElapsedTime(Math.floor((savedSession.stopTime - savedSession.startTime) / 1000));
             }
@@ -120,62 +174,209 @@ export const ProductionView: React.FC = () => {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  const getSectorTimesForDisplay = (production: ProductionEntry) => {
+    const merged = { ...(production.sectorTimes || {}) };
+    if (production.status === 'working') {
+      const startRef = production.sectorStartTime || production.startTime;
+      const currentElapsed = Math.max(0, Math.floor((Date.now() - startRef) / 1000));
+      merged[production.currentSector] = (merged[production.currentSector] || 0) + currentElapsed;
+    }
+    return merged;
+  };
+
+  const formatSectorTimes = (production: ProductionEntry) => {
+    const bySector = getSectorTimesForDisplay(production);
+    return availableSectors
+      .filter(sector => (bySector[sector] || 0) > 0)
+      .map(sector => `${sector} ${formatTime(bySector[sector])}`)
+      .join(' | ');
+  };
+
   // Handlers
+  const loadProductionIntoPanel = (production: ProductionEntry) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+
+    if (!isAdminUser && currentUser?.sector && production.currentSector !== currentUser.sector) {
+      alert('Esta peça já foi encaminhada para outro setor e não está mais disponível para você.');
+      return;
+    }
+
+    setPartId(production.partCode);
+    setPartName(production.partName);
+    setClientName(systemStore.getProducts().find(p => p.code === production.partCode)?.client || clientName);
+    if (currentUser?.name) {
+      setEmployeeName(currentUser.name);
+      setSelectedAvatar(currentUser.avatar);
+    }
+    setCurrentSector(production.currentSector);
+    setNextSector(getNextSectorInFlow(production.currentSector, availableSectors));
+    setProcessId(production.id);
+    setLoadedProductionId(production.id);
+    setStartTime(production.sectorStartTime || production.startTime);
+    setStopTime(null);
+    setIsRunning(production.status === 'working');
+    setIsFinished(production.status === 'finished');
+    setElapsedTime(Math.floor((Date.now() - (production.sectorStartTime || production.startTime)) / 1000));
+  };
+
   const handleSelectPart = (part: Product) => {
     setPartId(part.code);
     setPartName(part.name);
     setClientName(part.client);
+    const triagem = availableSectors.find(s => s.toLowerCase() === 'triagem') || availableSectors[0] || '';
+    setCurrentSector(triagem);
+    setNextSector(getNextSectorInFlow(triagem, availableSectors));
+    setLoadedProductionId('');
+    setIsRunning(false);
+    setIsFinished(false);
+    setElapsedTime(0);
     setShowPartModal(false);
-  };
-
-  const handleSectorSearch = (type: 'current' | 'next') => {
-    // Refresh sectors just in case
-    const sectors = systemStore.getSectors().map(s => s.name);
-    setAvailableSectors(sectors);
-    setShowSectorModal(type);
-  };
-
-  const handleSelectSector = (sector: string) => {
-    if (showSectorModal === 'current') {
-      setCurrentSector(sector);
-    } else {
-      setNextSector(sector);
-    }
-    setShowSectorModal(null);
   };
 
   const handleStartProduction = () => {
     if (!partId || !clientName) return;
 
+    const triagem = availableSectors.find(s => s.toLowerCase() === 'triagem') || availableSectors[0] || '';
+    const nextFromTriagem = getNextSectorInFlow(triagem, availableSectors);
+
+    setCurrentSector(triagem);
+    setNextSector(nextFromTriagem);
+
     const now = Date.now();
+    const newProcessId = systemStore.getNextProcessId();
     setStartTime(now);
-    setProcessId(partId); // Use Original ID
+    setElapsedTime(0);
+    setProcessId(newProcessId);
+    setLoadedProductionId(newProcessId);
     setIsRunning(true);
     setIsFinished(false);
     
     systemStore.startProduction({
-        id: partId, 
+      id: newProcessId,
         employeeName: employeeName,
         avatar: selectedAvatar,
         partName: partName,
         partCode: partId,
-        currentSector: currentSector,
+        currentSector: triagem,
         startTime: now,
+        sectorStartTime: now,
+        sectorTimes: {},
         status: 'working',
         dailyCount: 0 
     });
+
+    const currentUser = systemStore.getCurrentUser();
+    const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+    refreshActiveProductions({ name: currentUser?.name, sector: currentUser?.sector, isAdmin: isAdminUser });
   };
 
   const handleNextSector = () => {
+    if (!isRunning) return;
+    const targetProcessId = processId || loadedProductionId;
+    if (!targetProcessId) return;
+
+    if (nextSector) {
+        const newCurrent = nextSector;
+        const upcoming = getNextSectorInFlow(newCurrent, availableSectors);
+        const now = Date.now();
+        setCurrentSector(newCurrent);
+        setNextSector(upcoming);
+        setStartTime(now);
+        setElapsedTime(0);
+        systemStore.updateProductionSector(targetProcessId, newCurrent, employeeName);
+
+        const currentUser = systemStore.getCurrentUser();
+        const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+        refreshActiveProductions({ name: currentUser?.name, sector: currentUser?.sector, isAdmin: isAdminUser });
+
+        if (!isAdminUser) {
+          // User comum não acompanha peça fora do seu setor após o envio.
+          clearPanelForNextWork();
+        }
+        return;
+    }
+
     const now = Date.now();
     setStopTime(now);
     setIsRunning(false);
     setIsFinished(true);
-    
-    if (nextSector) {
-        systemStore.updateProductionSector(partId, nextSector);
+    systemStore.finishProduction(targetProcessId, employeeName);
+
+    alert('A peca esta pronta para entrega. Pressione OK para continuar.');
+    const clientData = systemStore.getClients().find(c => c.name === clientName);
+    systemStore.addDeliveryAlert({
+      processId: targetProcessId,
+      partCode: partId,
+      partName,
+      clientName,
+      clientContact: clientData?.contact || '',
+      clientEmail: clientData?.email || '',
+    });
+
+    const currentUser = systemStore.getCurrentUser();
+    const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+    refreshActiveProductions({ name: currentUser?.name, sector: currentUser?.sector, isAdmin: isAdminUser });
+
+    if (!isAdminUser) {
+      clearPanelForNextWork();
     }
-    systemStore.finishProduction(partId);
+  };
+
+  const handlePreviousSectorAdmin = () => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+
+    if (!isAdmin) {
+      alert('Somente o administrador pode voltar para o setor anterior.');
+      return;
+    }
+
+    const previous = getPreviousSectorInFlow(currentSector, availableSectors);
+    if (!previous) {
+      alert('Nao existe setor anterior para o setor atual.');
+      return;
+    }
+
+    setCurrentSector(previous);
+    setNextSector(getNextSectorInFlow(previous, availableSectors));
+
+    const targetProcessId = processId || loadedProductionId;
+    if (targetProcessId && isRunning) {
+      systemStore.updateProductionSector(targetProcessId, previous, employeeName);
+      const now = Date.now();
+      setStartTime(now);
+      setElapsedTime(0);
+    }
+
+    const user = systemStore.getCurrentUser();
+    const admin = user?.username?.trim().toLowerCase() === 'admin';
+    refreshActiveProductions({ name: user?.name, sector: user?.sector, isAdmin: admin });
+  };
+
+  const handleSearchProduction = () => {
+    const user = systemStore.getCurrentUser();
+    const admin = user?.username?.trim().toLowerCase() === 'admin';
+    refreshActiveProductions({ name: user?.name, sector: user?.sector, isAdmin: admin });
+    setShowProcessModal(true);
+  };
+
+  const handleNewProductionFromSearch = () => {
+    const triagem = availableSectors.find(s => s.toLowerCase() === 'triagem') || availableSectors[0] || '';
+    setPartId('');
+    setPartName('');
+    setClientName('');
+    setCurrentSector(triagem);
+    setNextSector(getNextSectorInFlow(triagem, availableSectors));
+    setLoadedProductionId('');
+    setProcessId('');
+    setIsRunning(false);
+    setIsFinished(false);
+    setElapsedTime(0);
+    setStartTime(0);
+    setStopTime(null);
+    setShowProcessModal(false);
+    setShowPartModal(true);
   };
 
   const handleReset = () => {
@@ -186,22 +387,40 @@ export const ProductionView: React.FC = () => {
     setStartTime(0);
     setStopTime(null);
     setProcessId('');
+    setLoadedProductionId('');
     setPartId('');
     setPartName('');
     setClientName('');
-    setNextSector('');
-    
-    // Re-assert current user sector if needed
+    const triagem = availableSectors.find(s => s.toLowerCase() === 'triagem') || availableSectors[0] || '';
+    setCurrentSector(triagem);
+    setNextSector(getNextSectorInFlow(triagem, availableSectors));
+
     const currentUser = systemStore.getCurrentUser();
-    if (currentUser) setCurrentSector(currentUser.sector);
+    const isAdminUser = currentUser?.username?.trim().toLowerCase() === 'admin';
+    refreshActiveProductions({ name: currentUser?.name, sector: currentUser?.sector, isAdmin: isAdminUser });
+    
+    // Keep production start sector fixed to Triagem.
   };
+
+  const currentUser = systemStore.getCurrentUser();
+  const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
 
   return (
     <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500 relative pb-20">
-      <h2 className="text-[#FFD700] text-2xl font-bold mb-8 border-b border-[#FFD700]/30 pb-2 flex items-center gap-2">
-        <Factory className="w-6 h-6" />
-        Controle de Produção
-      </h2>
+      <div className="mb-8 border-b border-[#FFD700]/30 pb-2 flex items-center justify-between gap-4 flex-wrap">
+        <h2 className="text-[#FFD700] text-2xl font-bold flex items-center gap-2">
+          <Factory className="w-6 h-6" />
+          Controle de Produção
+        </h2>
+        <button
+          type="button"
+          onClick={handleSearchProduction}
+          className="bg-[#4a148c] hover:bg-[#3c0360] border border-[#570a8a] text-white px-4 py-2 rounded-md shadow-md text-sm font-bold transition-colors flex items-center gap-2"
+        >
+          <Search className="w-4 h-4 text-[#FFD700]" />
+          Pesquisar
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left Column - Form Fields */}
@@ -272,17 +491,15 @@ export const ProductionView: React.FC = () => {
                             type="text" 
                             value={currentSector}
                             readOnly
-                            className="w-full border border-[#570a8a] rounded-sm p-3 text-white focus:outline-none shadow-inner placeholder-purple-300/50 cursor-pointer" 
+                            className="w-full border border-[#570a8a] rounded-sm p-3 text-white focus:outline-none shadow-inner placeholder-purple-300/50" 
                             placeholder="Setor onde a peça esta" 
                             style={{ backgroundColor: '#3b0764' }}
-                            onClick={() => !isRunning && handleSectorSearch('current')}
                         />
                         <button 
-                            onClick={() => handleSectorSearch('current')}
-                            disabled={isRunning}
-                            className={`bg-gray-600 hover:bg-gray-500 text-white text-xs px-4 py-1 rounded-sm transition-colors shadow-md font-medium ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            disabled
+                            className="bg-gray-700 text-gray-300 text-xs px-4 py-1 rounded-sm shadow-md font-medium cursor-not-allowed"
                         >
-                            Buscar
+                            Auto
                         </button>
                     </div>
                 </div>
@@ -294,16 +511,15 @@ export const ProductionView: React.FC = () => {
                             type="text" 
                             value={nextSector}
                             readOnly
-                            className="w-full border border-[#570a8a] rounded-sm p-3 text-white focus:outline-none shadow-inner placeholder-purple-300/50 cursor-pointer" 
+                            className="w-full border border-[#570a8a] rounded-sm p-3 text-white focus:outline-none shadow-inner placeholder-purple-300/50" 
                             placeholder="Para onde a peça vai" 
                             style={{ backgroundColor: '#3b0764' }}
-                            onClick={() => handleSectorSearch('next')}
                         />
                         <button 
-                            onClick={() => handleSectorSearch('next')}
-                            className="bg-gray-600 hover:bg-gray-500 text-white text-xs px-4 py-1 rounded-sm transition-colors shadow-md font-medium"
+                            disabled
+                            className="bg-gray-700 text-gray-300 text-xs px-4 py-1 rounded-sm shadow-md font-medium cursor-not-allowed"
                         >
-                            Buscar
+                            Auto
                         </button>
                     </div>
                 </div>
@@ -321,13 +537,23 @@ export const ProductionView: React.FC = () => {
                     </button>
                  ) : (
                     <div className="flex flex-col gap-3">
-                         <button 
-                            onClick={handleNextSector}
-                            disabled={!isRunning}
-                            className={`w-full font-bold py-4 rounded-md shadow-lg transition-all text-xl flex items-center justify-center gap-3 uppercase tracking-wide ${!isRunning ? 'hidden' : 'bg-emerald-600 hover:bg-emerald-500 text-white hover:scale-[1.01]'}`}
+                     {isRunning && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <button 
+                          onClick={handleNextSector}
+                          className="w-full font-bold py-4 rounded-md shadow-lg transition-all text-xl flex items-center justify-center gap-3 uppercase tracking-wide bg-emerald-600 hover:bg-emerald-500 text-white hover:scale-[1.01]"
                         >
-                            <CheckCircle className="w-6 h-6" /> Próximo Setor
+                          <CheckCircle className="w-6 h-6" /> Próximo Setor
                         </button>
+                        <button
+                          onClick={handlePreviousSectorAdmin}
+                          disabled={!isAdmin}
+                          className={`w-full font-bold py-4 rounded-md shadow-lg transition-all text-base flex items-center justify-center gap-2 uppercase tracking-wide ${isAdmin ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-gray-700 text-gray-400 cursor-not-allowed'}`}
+                        >
+                          <RotateCcw className="w-5 h-5" /> Voltar Setor (Admin)
+                        </button>
+                      </div>
+                     )}
                         
                         {isFinished && (
                              <button 
@@ -374,34 +600,65 @@ export const ProductionView: React.FC = () => {
         </div>
       </div>
 
-      {/* Sector Selection Modal */}
-      {showSectorModal && (
+      {/* Search Running Production Modal */}
+      {showProcessModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-          <div className="bg-[#2e0249] border-2 border-[#FFD700] rounded-lg shadow-2xl max-w-md w-full animate-in zoom-in duration-300">
+          <div className="bg-[#2e0249] border-2 border-[#FFD700] rounded-lg shadow-2xl max-w-2xl w-full animate-in zoom-in duration-300 overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-[#570a8a]">
-              <h3 className="text-[#FFD700] text-lg font-bold">
-                Selecionar {showSectorModal === 'current' ? 'Setor Atual' : 'Próximo Setor'}
+              <h3 className="text-[#FFD700] text-lg font-bold flex items-center gap-2">
+                <Search className="w-5 h-5" />
+                Peças em Produção
               </h3>
-              <button 
-                onClick={() => setShowSectorModal(null)}
+              <button
+                onClick={() => setShowProcessModal(false)}
                 className="text-gray-400 hover:text-white transition-colors"
               >
                 <X className="w-6 h-6" />
               </button>
             </div>
+
             <div className="p-2 max-h-[60vh] overflow-y-auto">
-              {availableSectors.length > 0 ? (
-                availableSectors.map((sector) => (
+              {activeProductions.length === 0 ? (
+                <div className="p-6 text-center text-gray-400">Nenhuma peça em produção no momento.</div>
+              ) : (
+                activeProductions.map((prod) => (
+                  <button
+                    key={`${prod.id}-${prod.startTime}`}
+                    onClick={() => {
+                      loadProductionIntoPanel(prod);
+                      setShowProcessModal(false);
+                    }}
+                    className={`w-full text-left p-4 border-b border-[#570a8a]/50 last:border-none transition-colors ${loadedProductionId === prod.id ? 'bg-[#3c0360]' : 'hover:bg-[#3c0360]'}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-bold text-[#FFD700]">{prod.partName}</p>
+                        <p className="text-xs text-gray-300">ID Processo: {prod.id} | ID Peça: {prod.partCode} | Setor: {prod.currentSector}</p>
+                        <p className="text-xs text-gray-400">Funcionário: {prod.employeeName}</p>
+                        <p className="text-xs text-cyan-300 mt-1">{formatSectorTimes(prod) || 'Sem tempo acumulado ainda.'}</p>
+                      </div>
+                      <span className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-1 rounded uppercase">Em processo</span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end gap-3">
+              <button
+                onClick={() => setShowProcessModal(false)}
+                className="px-4 py-2 rounded border border-[#570a8a] text-gray-300 hover:text-white hover:bg-[#3c0360] transition-colors"
+              >
+                Fechar
+              </button>
+              {isAdmin && (
                 <button
-                  key={sector}
-                  onClick={() => handleSelectSector(sector)}
-                  className="w-full text-left p-3 hover:bg-[#3c0360] text-white border-b border-[#570a8a]/50 last:border-none transition-colors flex items-center justify-between group"
+                  onClick={handleNewProductionFromSearch}
+                  className="px-4 py-2 rounded bg-[#FFD700] hover:bg-[#e6c200] text-[#2e0249] font-bold transition-colors flex items-center gap-2"
                 >
-                  <span>{sector}</span>
-                  <ChevronRight className="w-4 h-4 opacity-0 group-hover:opacity-100 text-[#FFD700]" />
+                  <PlusCircle className="w-4 h-4" />
+                  Nova Produção
                 </button>
-              ))) : (
-                 <div className="p-4 text-center text-gray-400">Nenhum setor cadastrado.</div>
               )}
             </div>
           </div>

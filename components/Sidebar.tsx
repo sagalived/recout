@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActiveView } from '../App';
+import { ActiveView } from '../types/activeView';
 import { Users, UserCircle, Package, Layers, LogOut, LayoutDashboard, HelpCircle, Factory } from 'lucide-react';
 
 interface SidebarProps {

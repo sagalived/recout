@@ -20,7 +20,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onRegisterClick }) => {
       if (success) {
           onLogin();
       } else {
-          alert("Usuário ou senha incorretos. Tente 'admin' / '123' ou cadastre um novo.");
+          alert("Usuário ou senha incorretos. Tente 'admin' / 'admin' ou cadastre um novo.");
       }
     }
   };

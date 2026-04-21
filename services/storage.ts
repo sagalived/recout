@@ -27,6 +27,15 @@ export interface ProductionEntry {
   partCode: string;
   currentSector: string;
   startTime: number; // timestamp
+  sectorStartTime: number; // timestamp do inicio no setor atual
+  sectorTimes: Record<string, number>; // segundos por setor
+  sectorHistory?: Array<{
+    sector: string;
+    employeeName: string;
+    startedAt: number;
+    endedAt: number;
+    durationSeconds: number;
+  }>;
   status: 'working' | 'paused' | 'finished';
   dailyCount: number; 
 }
@@ -47,6 +56,26 @@ export interface Sector {
   description: string;
 }
 
+export interface DeliveryAlert {
+  id: string;
+  processId: string;
+  partCode: string;
+  partName: string;
+  clientName: string;
+  clientContact: string;
+  clientEmail: string;
+  createdAt: number;
+  delivered: boolean;
+}
+
+const DEFAULT_SECTORS: Sector[] = [
+  { id: 1, name: 'Triagem', manager: 'João Paulo', description: 'Recebimento e separação inicial de materiais.' },
+  { id: 2, name: 'CAD', manager: 'Ana Maria', description: 'Modelagem e detalhamento técnico das peças.' },
+  { id: 3, name: 'CAM', manager: 'Pedro Santos', description: 'Programação e preparação para fabricação assistida.' },
+  { id: 4, name: 'Freezagem', manager: 'Carlos Oliveira', description: 'Estabilização e preparação intermediária de produção.' },
+  { id: 5, name: 'Acabamento', manager: 'Fernanda Lima', description: 'Finalização, revisão visual e controle de qualidade.' },
+];
+
 // Interface for UI Persistence (Active Tab State)
 export interface ProductionSession {
   employeeName: string;
@@ -66,22 +95,15 @@ export interface ProductionSession {
 class SystemStore {
   // Initial Data Defaults (Clean State - Only Admin)
   employees: Employee[] = [
-     { id: 1, name: 'Administrador', sector: 'Administração', avatar: null, status: 'Online', cpf: '000.000.000-00', dailyProductionBase: 0, username: 'admin', password: '123' }
+    { id: 1, name: 'Administrador', sector: 'Triagem', avatar: null, status: 'Online', cpf: '000.000.000-00', dailyProductionBase: 0, username: 'admin', password: 'admin' }
   ];
 
   products: Product[] = [];
   clients: Client[] = [];
   production: ProductionEntry[] = [];
+  deliveryAlerts: DeliveryAlert[] = [];
   
-  sectors: Sector[] = [
-    { id: 1, name: 'Triagem', manager: 'João Paulo', description: 'Recebimento e separação inicial de materiais.' },
-    { id: 2, name: 'Corte', manager: 'Ana Maria', description: 'Corte de tecidos conforme moldes.' },
-    { id: 3, name: 'Costura', manager: 'Pedro Santos', description: 'Montagem das peças.' },
-    { id: 4, name: 'Montagem Final', manager: 'Carlos Oliveira', description: 'Acabamento e verificação final.' },
-    { id: 5, name: 'Bordado', manager: 'Fernanda Lima', description: 'Aplicação de bordados e detalhes.' },
-    { id: 6, name: 'Embalagem', manager: 'Roberto Costa', description: 'Embalamento final dos produtos.' },
-    { id: 7, name: 'Expedição', manager: 'Juliana Silva', description: 'Envio para o cliente.' },
-  ];
+  sectors: Sector[] = DEFAULT_SECTORS.map(s => ({ ...s }));
 
   // Persistence State
   currentSession: ProductionSession | null = null;
@@ -97,19 +119,119 @@ class SystemStore {
   // --- STORAGE PERSISTENCE ---
   private loadFromStorage() {
     try {
+      let shouldPersistMigration = false;
       const storedData = localStorage.getItem(this.STORAGE_KEY);
       if (storedData) {
         const parsed = JSON.parse(storedData);
         if (parsed.employees && Array.isArray(parsed.employees)) this.employees = parsed.employees;
         if (parsed.products && Array.isArray(parsed.products)) this.products = parsed.products;
         if (parsed.clients && Array.isArray(parsed.clients)) this.clients = parsed.clients;
-        if (parsed.production && Array.isArray(parsed.production)) this.production = parsed.production;
+        if (parsed.production && Array.isArray(parsed.production)) {
+          this.production = parsed.production.map((entry: ProductionEntry) => ({
+            ...entry,
+            sectorStartTime: entry.sectorStartTime || entry.startTime,
+            sectorTimes: entry.sectorTimes || {},
+            sectorHistory: entry.sectorHistory || []
+          }));
+        }
+        if (parsed.deliveryAlerts && Array.isArray(parsed.deliveryAlerts)) {
+          this.deliveryAlerts = parsed.deliveryAlerts.map((alert: DeliveryAlert) => ({
+            ...alert,
+            clientContact: alert.clientContact || '',
+            clientEmail: alert.clientEmail || ''
+          }));
+        }
         if (parsed.sectors && Array.isArray(parsed.sectors)) this.sectors = parsed.sectors;
         
         // Restore logged in user from storage if available
         if (parsed.currentUser) {
             this.currentUser = parsed.currentUser;
         }
+
+        // Migration: enforce default admin credentials as admin/admin.
+        const adminIndex = this.employees.findIndex(e => e.username?.trim().toLowerCase() === 'admin');
+        if (adminIndex >= 0 && this.employees[adminIndex].password !== 'admin') {
+          this.employees[adminIndex] = { ...this.employees[adminIndex], password: 'admin' };
+          shouldPersistMigration = true;
+        }
+      }
+
+      if (!this.employees.some(e => e.username?.trim().toLowerCase() === 'admin')) {
+        this.employees.unshift({
+          id: 1,
+          name: 'Administrador',
+          sector: 'Triagem',
+          avatar: null,
+          status: 'Online',
+          cpf: '000.000.000-00',
+          dailyProductionBase: 0,
+          username: 'admin',
+          password: 'admin'
+        });
+        shouldPersistMigration = true;
+      }
+
+      const normalizedCurrentSectors = this.sectors
+        .map(s => s.name.trim().toLowerCase())
+        .sort()
+        .join('|');
+      const normalizedDefaultSectors = DEFAULT_SECTORS
+        .map(s => s.name.trim().toLowerCase())
+        .sort()
+        .join('|');
+
+      if (normalizedCurrentSectors !== normalizedDefaultSectors || this.sectors.length !== DEFAULT_SECTORS.length) {
+        this.sectors = DEFAULT_SECTORS.map(s => ({ ...s }));
+        shouldPersistMigration = true;
+      }
+
+      // Seed data for quick manual testing when records are below target volume.
+      const targetCount = 10;
+      if (this.clients.length < targetCount || this.products.length < targetCount) {
+        const sampleClients: Client[] = [
+          { id: Date.now() + 1, name: 'Cliente Alpha', doc: '11.111.111/0001-11', contact: '(11) 98888-1001', email: 'alpha@cliente.com', address: 'Rua A, 100' },
+          { id: Date.now() + 2, name: 'Cliente Beta', doc: '22.222.222/0001-22', contact: '(11) 98888-1002', email: 'beta@cliente.com', address: 'Rua B, 200' },
+          { id: Date.now() + 3, name: 'Cliente Gama', doc: '33.333.333/0001-33', contact: '(11) 98888-1003', email: 'gama@cliente.com', address: 'Rua C, 300' },
+          { id: Date.now() + 4, name: 'Cliente Delta', doc: '44.444.444/0001-44', contact: '(11) 98888-1004', email: 'delta@cliente.com', address: 'Rua D, 400' },
+          { id: Date.now() + 5, name: 'Cliente Epsilon', doc: '55.555.555/0001-55', contact: '(11) 98888-1005', email: 'epsilon@cliente.com', address: 'Rua E, 500' },
+          { id: Date.now() + 6, name: 'Cliente Zeta', doc: '66.666.666/0001-66', contact: '(11) 98888-1006', email: 'zeta@cliente.com', address: 'Rua F, 600' },
+          { id: Date.now() + 7, name: 'Cliente Eta', doc: '77.777.777/0001-77', contact: '(11) 98888-1007', email: 'eta@cliente.com', address: 'Rua G, 700' },
+          { id: Date.now() + 8, name: 'Cliente Theta', doc: '88.888.888/0001-88', contact: '(11) 98888-1008', email: 'theta@cliente.com', address: 'Rua H, 800' },
+          { id: Date.now() + 9, name: 'Cliente Iota', doc: '99.999.999/0001-99', contact: '(11) 98888-1009', email: 'iota@cliente.com', address: 'Rua I, 900' },
+          { id: Date.now() + 10, name: 'Cliente Kappa', doc: '10.101.010/0001-10', contact: '(11) 98888-1010', email: 'kappa@cliente.com', address: 'Rua J, 1000' },
+        ];
+
+        sampleClients.forEach(sample => {
+          if (this.clients.length >= targetCount) return;
+          const exists = this.clients.some(c => c.name === sample.name || c.doc === sample.doc);
+          if (!exists) {
+            this.clients.push(sample);
+            shouldPersistMigration = true;
+          }
+        });
+
+        const baseCode = 2001;
+        const triagem = this.sectors.find(s => s.name.toLowerCase() === 'triagem')?.name || 'Triagem';
+        for (let i = 0; i < targetCount && this.products.length < targetCount; i++) {
+          const code = String(baseCode + i);
+          const name = `Peca Teste ${i + 1}`;
+          const client = this.clients[i % this.clients.length]?.name || 'Cliente Alpha';
+          const exists = this.products.some(p => p.code === code || p.name === name);
+          if (!exists) {
+            this.products.push({
+              id: Date.now() + 100 + i,
+              name,
+              code,
+              client,
+              sector: triagem
+            });
+            shouldPersistMigration = true;
+          }
+        }
+      }
+
+      if (shouldPersistMigration) {
+        this.saveToStorage();
       }
     } catch (e) {
       console.error("Erro ao carregar dados:", e);
@@ -123,6 +245,7 @@ class SystemStore {
         products: this.products,
         clients: this.clients,
         production: this.production,
+        deliveryAlerts: this.deliveryAlerts,
         sectors: this.sectors,
         currentUser: this.currentUser 
       };
@@ -223,6 +346,95 @@ class SystemStore {
 
   // --- PRODUCTION ---
   getProduction() { return this.production; }
+
+  getPendingDeliveryAlerts() {
+    this.loadFromStorage();
+    return this.deliveryAlerts.filter(a => !a.delivered);
+  }
+
+  addDeliveryAlert(alert: Omit<DeliveryAlert, 'id' | 'createdAt' | 'delivered'>) {
+    this.loadFromStorage();
+    const alreadyExists = this.deliveryAlerts.some(a => a.processId === alert.processId && !a.delivered);
+    if (alreadyExists) return;
+
+    this.deliveryAlerts.push({
+      id: `delivery-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      processId: alert.processId,
+      partCode: alert.partCode,
+      partName: alert.partName,
+      clientName: alert.clientName,
+      clientContact: alert.clientContact,
+      clientEmail: alert.clientEmail,
+      createdAt: Date.now(),
+      delivered: false,
+    });
+    this.saveToStorage();
+  }
+
+  markDeliveryAlertAsDelivered(alertId: string) {
+    this.loadFromStorage();
+    this.deliveryAlerts = this.deliveryAlerts.filter(alert => alert.id !== alertId);
+    this.saveToStorage();
+  }
+
+  deleteProcessCompletely(processId: string) {
+    this.loadFromStorage();
+
+    const processEntries = this.production.filter(p => p.id === processId);
+    const relatedPartCodes = new Set(processEntries.map(p => p.partCode));
+
+    // Remove all historical entries of this process.
+    this.production = this.production.filter(p => p.id !== processId);
+
+    // Remove linked product records (piece) from catalog.
+    if (relatedPartCodes.size > 0) {
+      this.products = this.products.filter(p => !relatedPartCodes.has(p.code));
+    }
+
+    // Remove pending delivery alerts related to this process.
+    this.deliveryAlerts = this.deliveryAlerts.filter(a => a.processId !== processId);
+
+    // Clear active session if it's the same process.
+    if (this.currentSession?.processId === processId) {
+      this.currentSession = null;
+    }
+
+    this.saveToStorage();
+  }
+
+  getActiveProductions(employeeName?: string) {
+    return this.production.filter(p => {
+      const isActive = p.status === 'working' || p.status === 'paused';
+      if (!isActive) return false;
+      if (!employeeName) return true;
+      return p.employeeName === employeeName;
+    });
+  }
+
+  getNextProcessId() {
+    this.loadFromStorage();
+    let maxId = 0;
+
+    this.production.forEach(p => {
+      const numeric = parseInt(String(p.id).replace(/\D/g, ''), 10);
+      if (!isNaN(numeric) && numeric > maxId) {
+        maxId = numeric;
+      }
+    });
+
+    const next = maxId > 0 ? maxId + 1 : 1;
+    return next.toString().padStart(6, '0');
+  }
+
+  private getLastWorkingProductionIndex(id: string, employeeName?: string) {
+    const reversedIndex = this.production
+      .slice()
+      .reverse()
+      .findIndex(p => (p.id === id || p.partCode === id) && p.status === 'working' && (!employeeName || p.employeeName === employeeName));
+
+    if (reversedIndex === -1) return -1;
+    return this.production.length - 1 - reversedIndex;
+  }
   
   startProduction(entry: ProductionEntry) {
     this.loadFromStorage();
@@ -230,22 +442,56 @@ class SystemStore {
     this.saveToStorage();
   }
 
-  updateProductionSector(id: string, sector: string) {
+  updateProductionSector(id: string, sector: string, actorName?: string) {
     this.loadFromStorage();
-    const p = this.production.find(x => x.id === id || x.partCode === id); 
-    if(p) {
-        p.currentSector = sector;
-        this.saveToStorage();
+    const index = this.getLastWorkingProductionIndex(id);
+    if (index !== -1) {
+      const p = this.production[index];
+      const now = Date.now();
+      const spentSeconds = Math.max(0, Math.floor((now - (p.sectorStartTime || p.startTime)) / 1000));
+      const current = p.currentSector;
+      const handler = actorName || p.employeeName;
+
+      p.sectorTimes = p.sectorTimes || {};
+      p.sectorTimes[current] = (p.sectorTimes[current] || 0) + spentSeconds;
+      p.sectorHistory = p.sectorHistory || [];
+      p.sectorHistory.push({
+        sector: current,
+        employeeName: handler,
+        startedAt: p.sectorStartTime || p.startTime,
+        endedAt: now,
+        durationSeconds: spentSeconds
+      });
+      p.employeeName = handler;
+      p.currentSector = sector;
+      p.sectorStartTime = now;
+      this.saveToStorage();
     }
   }
 
-  finishProduction(id: string) {
+  finishProduction(id: string, actorName?: string) {
     this.loadFromStorage();
-    const index = this.production.slice().reverse().findIndex(x => (x.id === id || x.partCode === id) && x.status === 'working');
-    if(index !== -1) {
-        const realIndex = this.production.length - 1 - index;
-        this.production[realIndex].status = 'finished';
-        this.saveToStorage();
+    const index = this.getLastWorkingProductionIndex(id);
+    if (index !== -1) {
+      const now = Date.now();
+      const p = this.production[index];
+      const spentSeconds = Math.max(0, Math.floor((now - (p.sectorStartTime || p.startTime)) / 1000));
+      const current = p.currentSector;
+      const handler = actorName || p.employeeName;
+
+      p.sectorTimes = p.sectorTimes || {};
+      p.sectorTimes[current] = (p.sectorTimes[current] || 0) + spentSeconds;
+      p.sectorHistory = p.sectorHistory || [];
+      p.sectorHistory.push({
+        sector: current,
+        employeeName: handler,
+        startedAt: p.sectorStartTime || p.startTime,
+        endedAt: now,
+        durationSeconds: spentSeconds
+      });
+      p.employeeName = handler;
+      p.status = 'finished';
+      this.saveToStorage();
     }
   }
 
@@ -253,35 +499,65 @@ class SystemStore {
     // No loadFromStorage here to avoid perf hit in loops, assume sync is handled by modifiers or initial load
     const startOfDay = new Date();
     startOfDay.setHours(0,0,0,0);
-    
-    const emp = this.employees.find(e => e.name === employeeName);
-    const baseCount = emp?.dailyProductionBase || 0;
 
-    const actualFinished = this.production.filter(p => 
-        p.employeeName === employeeName && 
-        p.status === 'finished' && 
-        p.startTime >= startOfDay.getTime()
-    ).length;
+    const processIds = new Set<string>();
+    this.production.forEach(p => {
+      (p.sectorHistory || []).forEach(h => {
+        if (h.employeeName === employeeName && h.endedAt >= startOfDay.getTime()) {
+          processIds.add(p.id);
+        }
+      });
+    });
 
-    return baseCount + actualFinished;
+    return processIds.size;
   }
 
   getMonthlyProductionCount(employeeName: string): number {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    
-    const emp = this.employees.find(e => e.name === employeeName);
-    
-    const actualFinished = this.production.filter(p => 
-        p.employeeName === employeeName && 
-        p.status === 'finished' && 
-        p.startTime >= startOfMonth
-    ).length;
 
-    const daysPassed = now.getDate();
-    const simulatedHistory = (emp?.dailyProductionBase || 0) * daysPassed;
+    const processIds = new Set<string>();
+    this.production.forEach(p => {
+      (p.sectorHistory || []).forEach(h => {
+        if (h.employeeName === employeeName && h.endedAt >= startOfMonth) {
+          processIds.add(p.id);
+        }
+      });
+    });
 
-    return simulatedHistory + actualFinished;
+    return processIds.size;
+  }
+
+  getEmployeeProcessHistory(employeeName: string) {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    const rows: Array<{
+      processId: string;
+      partCode: string;
+      partName: string;
+      sector: string;
+      durationSeconds: number;
+      endedAt: number;
+    }> = [];
+
+    this.production.forEach(p => {
+      (p.sectorHistory || []).forEach(h => {
+        if (h.employeeName === employeeName && h.endedAt >= startOfMonth) {
+          rows.push({
+            processId: p.id,
+            partCode: p.partCode,
+            partName: p.partName,
+            sector: h.sector,
+            durationSeconds: h.durationSeconds,
+            endedAt: h.endedAt
+          });
+        }
+      });
+    });
+
+    rows.sort((a, b) => b.endedAt - a.endedAt);
+    return rows;
   }
 
   // --- SESSION ---
@@ -293,15 +569,18 @@ class SystemStore {
 
   // --- STATS ---
   getSectorStats() {
-    const sectors = ['Triagem', 'Corte', 'Costura', 'Bordado', 'Montagem Final', 'Embalagem', 'Expedição'];
-    return sectors.map(sector => {
+    return this.sectors.map(sectorEntry => {
+        const sector = sectorEntry.name;
         const count = this.products.filter(p => p.sector === sector).length 
                     + this.production.filter(p => p.currentSector === sector && p.status === 'working').length;
         
         let capacity = 100;
         let color = 'bg-blue-500';
-        if (sector === 'Expedição') { capacity = 1000; color = 'bg-emerald-500'; }
+        if (sector === 'Acabamento') { capacity = 1000; color = 'bg-emerald-500'; }
         if (sector === 'Triagem') { capacity = 500; color = 'bg-indigo-500'; }
+        if (sector === 'CAD') { color = 'bg-cyan-500'; }
+        if (sector === 'CAM') { color = 'bg-violet-500'; }
+        if (sector === 'Freezagem') { color = 'bg-amber-500'; }
 
         return { name: sector, count, capacity, color };
     });

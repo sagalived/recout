@@ -1,12 +1,20 @@
 
 import React, { useState, useEffect } from 'react';
-import { Package, Trash2, Edit, Save, UserCircle } from 'lucide-react';
+import { Package, Trash2, Edit, Save, UserCircle, UserPlus, X } from 'lucide-react';
 import { systemStore, Product, Client } from '../services/storage';
 
 export const ProductForm: React.FC = () => {
   const [generatedCode, setGeneratedCode] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [showClientModal, setShowClientModal] = useState(false);
+  const [clientFormData, setClientFormData] = useState({
+    name: '',
+    doc: '',
+    contact: '',
+    email: '',
+    address: ''
+  });
   
   // Form State
   const [formData, setFormData] = useState({
@@ -45,6 +53,53 @@ export const ProductForm: React.FC = () => {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleClientInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setClientFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleQuickClientSave = () => {
+    const { name, doc, contact, email, address } = clientFormData;
+
+    if (!name.trim() || !doc.trim() || !contact.trim() || !email.trim() || !address.trim()) {
+      alert('Erro: Preencha todos os campos do cliente.');
+      return;
+    }
+
+    const duplicate = systemStore.getClients().some(
+      c => c.name.trim().toLowerCase() === name.trim().toLowerCase() || c.doc.trim().toLowerCase() === doc.trim().toLowerCase()
+    );
+
+    if (duplicate) {
+      alert('Erro: Já existe um cliente com este nome ou documento.');
+      return;
+    }
+
+    const newClient: Client = {
+      id: Date.now(),
+      name: name.trim(),
+      doc: doc.trim(),
+      contact: contact.trim(),
+      email: email.trim(),
+      address: address.trim()
+    };
+
+    systemStore.addClient(newClient);
+    const updatedClients = [...systemStore.getClients()];
+    setClients(updatedClients);
+    setFormData(prev => ({ ...prev, client: newClient.name }));
+
+    setClientFormData({
+      name: '',
+      doc: '',
+      contact: '',
+      email: '',
+      address: ''
+    });
+    setShowClientModal(false);
+    alert('Cliente cadastrado com sucesso!');
   };
 
   const handleSave = () => {
@@ -144,6 +199,14 @@ export const ProductForm: React.FC = () => {
                 <option value="" disabled>Nenhum cliente cadastrado</option>
               )}
             </select>
+            <button
+              type="button"
+              onClick={() => setShowClientModal(true)}
+              className="mt-2 text-xs text-[#FFD700] hover:text-white font-semibold transition-colors inline-flex items-center gap-2"
+            >
+              <UserPlus className="w-4 h-4" />
+              Não localizou o cliente? Cadastrar cliente
+            </button>
           </div>
 
           {/* Initial Sector */}
@@ -223,6 +286,106 @@ export const ProductForm: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {showClientModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="w-full max-w-2xl bg-[#2e0249] border border-[#FFD700] rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#570a8a] bg-[#4a148c]">
+              <h3 className="text-[#FFD700] text-lg font-bold flex items-center gap-2">
+                <UserPlus className="w-5 h-5" />
+                Cadastrar Cliente
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowClientModal(false)}
+                className="text-gray-300 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[#FFD700] font-bold text-sm">Nome</label>
+                  <input
+                    type="text"
+                    name="name"
+                    value={clientFormData.name}
+                    onChange={handleClientInputChange}
+                    className="w-full bg-[#1b002b] border border-[#570a8a] rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none"
+                    placeholder="Ex: Cliente XPTO"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[#FFD700] font-bold text-sm">Documento (CPF/CNPJ)</label>
+                  <input
+                    type="text"
+                    name="doc"
+                    value={clientFormData.doc}
+                    onChange={handleClientInputChange}
+                    className="w-full bg-[#1b002b] border border-[#570a8a] rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none"
+                    placeholder="Ex: 00.000.000/0001-00"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[#FFD700] font-bold text-sm">Telefone</label>
+                  <input
+                    type="text"
+                    name="contact"
+                    value={clientFormData.contact}
+                    onChange={handleClientInputChange}
+                    className="w-full bg-[#1b002b] border border-[#570a8a] rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none"
+                    placeholder="Ex: (11) 99999-9999"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[#FFD700] font-bold text-sm">E-mail</label>
+                  <input
+                    type="email"
+                    name="email"
+                    value={clientFormData.email}
+                    onChange={handleClientInputChange}
+                    className="w-full bg-[#1b002b] border border-[#570a8a] rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none"
+                    placeholder="Ex: cliente@empresa.com"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[#FFD700] font-bold text-sm">Endereço</label>
+                <textarea
+                  name="address"
+                  value={clientFormData.address}
+                  onChange={handleClientInputChange}
+                  className="w-full bg-[#1b002b] border border-[#570a8a] rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none h-24 resize-none"
+                  placeholder="Ex: Rua Exemplo, 123 - Centro"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 pb-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowClientModal(false)}
+                className="px-4 py-2 rounded-md border border-[#570a8a] text-white hover:bg-[#3c0360] transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleQuickClientSave}
+                className="px-5 py-2 rounded-md bg-[#FFD700] hover:bg-[#e6c200] text-[#2e0249] font-bold transition-colors"
+              >
+                Salvar Cliente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
