@@ -324,10 +324,16 @@ class SystemStore {
         localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
       } catch (storageError: any) {
         if (storageError.name === 'QuotaExceededError' || storageError.message.toLowerCase().includes('quota')) {
-          console.warn("Storage quota exceeded! Clearing partMedia to free up space...");
-          this.partMedia = [];
-          data.partMedia = [];
+          console.warn("Storage quota exceeded! Removing large media from storage to free up space, but keeping in memory.");
+          // Don't clear this.partMedia so it stays in UI
+          const filteredMedia = data.partMedia.filter(m => !m.dataUrl || m.dataUrl.length < 1000000);
+          data.partMedia = filteredMedia;
           localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+          
+          // Use setTimeout so the alert doesn't block the current execution thread
+          setTimeout(() => {
+            alert("⚠️ O arquivo enviado é muito grande (>1MB) para ser salvo permanentemente no banco de dados. Ele ficará disponível apenas até você fechar ou recarregar esta página.");
+          }, 100);
         } else {
           throw storageError;
         }
@@ -407,9 +413,9 @@ class SystemStore {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
     } catch (storageError: any) {
       if (storageError.name === 'QuotaExceededError' || storageError.message.toLowerCase().includes('quota')) {
-        console.warn("Storage quota exceeded during replacePersistedState! Clearing partMedia...");
-        this.partMedia = [];
-        snapshot.partMedia = [];
+        console.warn("Storage quota exceeded during replacePersistedState! Clearing large media...");
+        const filteredMedia = snapshot.partMedia.filter(m => !m.dataUrl || m.dataUrl.length < 1000000);
+        snapshot.partMedia = filteredMedia;
         localStorage.setItem(this.STORAGE_KEY, JSON.stringify(snapshot));
       }
     }
