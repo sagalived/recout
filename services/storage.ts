@@ -171,7 +171,21 @@ class SystemStore {
             clientEmail: alert.clientEmail || ''
           }));
         }
-        if (parsed.partMedia && Array.isArray(parsed.partMedia)) this.partMedia = parsed.partMedia;
+        if (parsed.partMedia && Array.isArray(parsed.partMedia)) {
+          const existingMap = new Map(this.partMedia.map(m => [m.id, m]));
+          const storageMap = new Map(parsed.partMedia.map((m: any) => [m.id, m]));
+          
+          const mergedMedia = [];
+          for (const [id, m] of existingMap) {
+              if (!storageMap.has(id)) {
+                  mergedMedia.push(m); // Keep temporary large files
+              }
+          }
+          for (const m of parsed.partMedia) {
+              mergedMedia.push(m);
+          }
+          this.partMedia = mergedMedia;
+        }
         if (parsed.sectors && Array.isArray(parsed.sectors)) this.sectors = parsed.sectors;
         if (typeof parsed.updatedAt === 'number') this.updatedAt = parsed.updatedAt;
         
