@@ -340,9 +340,18 @@ export const ProductionView: React.FC = () => {
                   for (let i = 0; i < colorAttr.count; i++) {
                     maxColor = Math.max(maxColor, colorAttr.getX(i), colorAttr.getY(i), colorAttr.getZ(i));
                   }
-                  if (maxColor > 1) {
+                  if (maxColor > 1.5) {
+                    const tempColor = new THREE.Color();
                     for (let i = 0; i < colorAttr.count; i++) {
-                      colorAttr.setXYZ(i, colorAttr.getX(i) / 255, colorAttr.getY(i) / 255, colorAttr.getZ(i) / 255);
+                      tempColor.setRGB(colorAttr.getX(i), colorAttr.getY(i), colorAttr.getZ(i));
+                      // OBJLoader incorrectly assumed 0-255 were 0-1 and applied SRGBToLinear.
+                      // We must reverse this to get the original 0-255 values, divide by 255, and convert back.
+                      tempColor.convertLinearToSRGB();
+                      tempColor.r /= 255;
+                      tempColor.g /= 255;
+                      tempColor.b /= 255;
+                      tempColor.convertSRGBToLinear();
+                      colorAttr.setXYZ(i, tempColor.r, tempColor.g, tempColor.b);
                     }
                     colorAttr.needsUpdate = true;
                   }
