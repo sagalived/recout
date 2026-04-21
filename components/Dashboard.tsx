@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Clock, Activity, Users, Package, AlertCircle, Calendar, X, BarChart, List, CheckCircle, Timer } from 'lucide-react';
+import { Clock, Activity, Users, Package, AlertCircle, Calendar, X, BarChart, List, CheckCircle, Timer, Eye } from 'lucide-react';
 import { ActiveView } from '../types/activeView';
-import { systemStore, Employee, Client, ProductionEntry, DeliveryAlert } from '../services/storage';
+import { systemStore, Employee, Client, ProductionEntry, DeliveryAlert, Product } from '../services/storage';
 
 interface DashboardProps {
   onChangeView: (view: ActiveView) => void;
@@ -26,6 +26,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
   const [sectorStats, setSectorStats] = useState<any[]>([]);
   const [totalDailyProduction, setTotalDailyProduction] = useState(0);
     const [totalInProcess, setTotalInProcess] = useState(0);
+    const [overdueByDeadlineCount, setOverdueByDeadlineCount] = useState(0);
   const [loading, setLoading] = useState(true);
     const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
     const [showFullTimelineModal, setShowFullTimelineModal] = useState(false);
@@ -37,6 +38,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
   const [monthlyStats, setMonthlyStats] = useState<{name: string, sector: string, count: number, avatar: string | null}[]>([]);
 
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+    const [showSectorDetailsModal, setShowSectorDetailsModal] = useState(false);
+        const [showOverdueModal, setShowOverdueModal] = useState(false);
+    const [selectedSectorName, setSelectedSectorName] = useState('');
   const [detailsTab, setDetailsTab] = useState<'clients' | 'employees' | 'production'>('production');
   const [allClients, setAllClients] = useState<Client[]>([]);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
@@ -51,6 +55,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
       const rawProduction = systemStore.getProduction();
       const stats = systemStore.getSectorStats();
       const allEmployees = systemStore.getEmployees();
+            const allProducts = systemStore.getProducts();
 
       // 1. Calculate Total Production for Today (All Employees, Active or Not)
       let todayTotal = 0;
@@ -78,6 +83,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
       }).filter(p => p.status === 'working' || p.status === 'paused'); // Only show active
 
     setTotalInProcess(rawProduction.filter(p => p.status === 'working' || p.status === 'paused').length);
+
+            const todayEnd = new Date();
+            todayEnd.setHours(23, 59, 59, 999);
+            const overdueCount = rawProduction.filter(p => p.status === 'working' || p.status === 'paused').filter(p => {
+                const product = allProducts.find(prod => prod.code === p.partCode);
+                if (!product?.deliveryDeadline) return false;
+                const deadline = new Date(`${product.deliveryDeadline}T23:59:59.999`);
+                return Date.now() > deadline.getTime();
+            }).length;
+            setOverdueByDeadlineCount(overdueCount);
 
       // Sort by most recent (lowest elapsed time usually means just started, or reverse)
       uiProduction.sort((a, b) => a.elapsedSeconds - b.elapsedSeconds);
@@ -153,6 +168,82 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+    const getProductByCode = (code: string): Product | undefined => {
+        return systemStore.getProducts().find(p => p.code === code);
+    };
+
+    const getDeadlineTimestamp = (product?: Product) => {
+        if (!product?.deliveryDeadline) return null;
+        return new Date(`${product.deliveryDeadline}T23:59:59`).getTime();
+    };
+
+    const getSectorRows = (sectorName: string) => {
+        const activeRows = productionEntries
+            .filter(p => (p.status === 'working' || p.status === 'paused') && p.currentSector === sectorName)
+            .map(p => {
+                const product = getProductByCode(p.partCode);
+                const deadlineTs = getDeadlineTimestamp(product);
+                const isOverdue = deadlineTs ? Date.now() > deadlineTs : false;
+
+                return {
+                    processId: p.id,
+                    partName: p.partName,
+                    partCode: p.partCode,
+                    technician: p.employeeName,
+                    elapsedSeconds: Math.max(0, Math.floor((Date.now() - (p.sectorStartTime || p.startTime)) / 1000)),
+                    clientName: product?.client || 'Nao encontrado',
+                    deadlineLabel: product?.deliveryDeadline ? new Date(product.deliveryDeadline).toLocaleDateString('pt-BR') : 'Sem prazo',
+                    forecastLabel: product?.deliveryDeadline ? new Date(product.deliveryDeadline).toLocaleDateString('pt-BR') : 'Sem previsão',
+                    isOverdue,
+                    isActive: true,
+                };
+            });
+
+        const activePartCodes = new Set(activeRows.map(row => row.partCode));
+        const catalogRows = systemStore.getProducts()
+            .filter(product => product.sector === sectorName && !activePartCodes.has(product.code))
+            .map(product => {
+                const deadlineTs = getDeadlineTimestamp(product);
+                const isOverdue = deadlineTs ? Date.now() > deadlineTs : false;
+
+                return {
+                    processId: '-',
+                    partName: product.name,
+                    partCode: product.code,
+                    technician: 'Aguardando início',
+                    elapsedSeconds: 0,
+                    clientName: product.client,
+                    deadlineLabel: product.deliveryDeadline ? new Date(product.deliveryDeadline).toLocaleDateString('pt-BR') : 'Sem prazo',
+                    forecastLabel: product.deliveryDeadline ? new Date(product.deliveryDeadline).toLocaleDateString('pt-BR') : 'Sem previsão',
+                    isOverdue,
+                    isActive: false,
+                };
+            });
+
+        return [...activeRows, ...catalogRows];
+    };
+
+    const getOverdueRows = () => {
+        return productionEntries
+            .filter(p => p.status === 'working' || p.status === 'paused')
+            .map(p => {
+                const product = getProductByCode(p.partCode);
+                const deadlineTs = getDeadlineTimestamp(product);
+                return {
+                    processId: p.id,
+                    partName: p.partName,
+                    partCode: p.partCode,
+                    sector: p.currentSector,
+                    technician: p.employeeName,
+                    elapsedSeconds: Math.max(0, Math.floor((Date.now() - (p.sectorStartTime || p.startTime)) / 1000)),
+                    clientName: product?.client || 'Nao encontrado',
+                    deadlineLabel: product?.deliveryDeadline ? new Date(product.deliveryDeadline).toLocaleDateString('pt-BR') : 'Sem prazo',
+                    deadlineTs,
+                };
+            })
+            .filter(row => Boolean(row.deadlineTs) && Date.now() > Number(row.deadlineTs));
+    };
+
     const getSectorTimesWithCurrent = (entry: ProductionEntry): Record<string, number> => {
         const merged = { ...(entry.sectorTimes || {}) };
         if (entry.status === 'working') {
@@ -194,6 +285,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
     };
 
     const selectedProcess = selectedProcessId ? productionEntries.find(p => p.id === selectedProcessId) || null : null;
+    const selectedSectorRows = selectedSectorName ? getSectorRows(selectedSectorName) : [];
+    const overdueRows = getOverdueRows();
     const currentUser = systemStore.getCurrentUser();
     const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
 
@@ -260,6 +353,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
             </div>
         </div>
       </div>
+
+            {overdueByDeadlineCount > 0 && (
+                <button
+                    type="button"
+                    onClick={() => setShowOverdueModal(true)}
+                    className="w-full text-left bg-red-900/40 border border-red-500 rounded-lg p-4 animate-pulse hover:bg-red-900/55 transition-colors"
+                >
+                    <p className="text-red-200 font-bold uppercase text-sm tracking-wide flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4" />
+                        Alerta Global: {overdueByDeadlineCount} peça(s) com prazo estourado. Clique para ver.
+                    </p>
+                </button>
+            )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
         
@@ -461,7 +567,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                             <div key={index} className="relative">
                                 <div className="flex justify-between items-end mb-1">
                                     <span className="font-medium text-sm text-gray-200">{sector.name}</span>
-                                    <span className="font-mono text-xs text-[#FFD700] font-bold">{sector.count} <span className="text-gray-500 font-normal">/ {sector.capacity}</span></span>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedSectorName(sector.name);
+                                                setShowSectorDetailsModal(true);
+                                            }}
+                                            className="text-[10px] px-2 py-0.5 rounded border border-cyan-500 text-cyan-300 hover:bg-cyan-900/30 transition-colors"
+                                            title="Ver detalhes das peças neste setor"
+                                        >
+                                            <span className="inline-flex items-center gap-1"><Eye className="w-3 h-3" /> Detalhes</span>
+                                        </button>
+                                        <span className="font-mono text-xs text-[#FFD700] font-bold">{sector.count} <span className="text-gray-500 font-normal">/ {sector.capacity}</span></span>
+                                    </div>
                                 </div>
                                 <div className="w-full bg-[#2e0249] rounded-full h-3 border border-[#570a8a] overflow-hidden">
                                     <div 
@@ -641,6 +760,140 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
           </div>
       )}
 
+            {showOverdueModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-[#2e0249] border border-red-500 rounded-xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+                        <div className="p-5 border-b border-[#570a8a] flex justify-between items-center bg-[#4a148c]">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                <AlertCircle className="w-5 h-5 text-red-300" />
+                                Peças com Prazo Estourado
+                            </h3>
+                            <button onClick={() => setShowOverdueModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] overflow-hidden">
+                                <table className="w-full text-left">
+                                    <thead className="bg-[#3c0360] text-gray-300 text-xs uppercase">
+                                        <tr>
+                                            <th className="p-3">Peça</th>
+                                            <th className="p-3">Setor</th>
+                                            <th className="p-3">Técnico</th>
+                                            <th className="p-3">Tempo no Setor</th>
+                                            <th className="p-3">Cliente</th>
+                                            <th className="p-3">Prazo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#570a8a]/50 text-sm">
+                                        {overdueRows.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={6} className="p-4 text-center text-gray-500">Nenhuma peça atrasada no momento.</td>
+                                            </tr>
+                                        ) : (
+                                            overdueRows.map((row, idx) => (
+                                                <tr key={`${row.processId}-${idx}`} className="hover:bg-[#2e0249]">
+                                                    <td className="p-3 text-white font-medium">
+                                                        {row.partName}
+                                                        <div className="text-xs text-gray-500 font-mono">{row.partCode}</div>
+                                                    </td>
+                                                    <td className="p-3 text-[#FFD700]">{row.sector}</td>
+                                                    <td className="p-3 text-gray-300">{row.technician}</td>
+                                                    <td className="p-3 text-cyan-300 font-mono">{formatTime(row.elapsedSeconds)}</td>
+                                                    <td className="p-3 text-gray-300">{row.clientName}</td>
+                                                    <td className="p-3">
+                                                        <span className="text-xs px-2 py-1 rounded border border-red-600 text-red-300 bg-red-900/20">
+                                                            {row.deadlineLabel}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end">
+                            <button
+                                onClick={() => setShowOverdueModal(false)}
+                                className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold transition-colors"
+                            >
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showSectorDetailsModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-[#2e0249] border border-cyan-400 rounded-xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+                        <div className="p-5 border-b border-[#570a8a] flex justify-between items-center bg-[#4a148c]">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Eye className="w-5 h-5 text-cyan-300" />
+                                Detalhes do Setor - {selectedSectorName}
+                            </h3>
+                            <button onClick={() => setShowSectorDetailsModal(false)} className="text-gray-400 hover:text-white transition-colors">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <div className="bg-[#1b002b] rounded-lg border border-[#570a8a] overflow-hidden">
+                                <table className="w-full text-left">
+                                    <thead className="bg-[#3c0360] text-gray-300 text-xs uppercase">
+                                        <tr>
+                                            <th className="p-3">Peça</th>
+                                            <th className="p-3">Técnico</th>
+                                            <th className="p-3">Tempo no Setor</th>
+                                            <th className="p-3">Cliente</th>
+                                            <th className="p-3">Previsão de Término</th>
+                                            <th className="p-3">Status Prazo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[#570a8a]/50 text-sm">
+                                        {selectedSectorRows.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={6} className="p-4 text-center text-gray-500">Nenhuma peça ativa neste setor.</td>
+                                            </tr>
+                                        ) : (
+                                            selectedSectorRows.map((row, idx) => (
+                                                <tr key={`${row.processId}-${idx}`} className="hover:bg-[#2e0249]">
+                                                    <td className="p-3 text-white font-medium">
+                                                        {row.partName}
+                                                        <div className="text-xs text-gray-500 font-mono">{row.partCode}</div>
+                                                    </td>
+                                                    <td className="p-3 text-gray-300">{row.technician}</td>
+                                                    <td className="p-3 text-cyan-300 font-mono">{row.isActive ? formatTime(row.elapsedSeconds) : '--:--:--'}</td>
+                                                    <td className="p-3 text-gray-300">{row.clientName}</td>
+                                                    <td className="p-3 text-gray-200">{row.forecastLabel}</td>
+                                                    <td className="p-3">
+                                                        <span className={`text-xs px-2 py-1 rounded border ${row.isOverdue ? 'border-red-600 text-red-300 bg-red-900/20' : 'border-emerald-600 text-emerald-300 bg-emerald-900/20'}`}>
+                                                            {row.isOverdue ? `Prazo estourado (${row.deadlineLabel})` : `No prazo (${row.deadlineLabel})`}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-[#570a8a] bg-[#1b002b] flex justify-end">
+                            <button
+                                onClick={() => setShowSectorDetailsModal(false)}
+                                className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold transition-colors"
+                            >
+                                Fechar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
       {/* General Details Modal */}
       {showDetailsModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -696,12 +949,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                                                 <th className="p-3">Peça</th>
                                                 <th className="p-3">Funcionário</th>
                                                 <th className="p-3">Setor Atual</th>
+                                                <th className="p-3">Cliente</th>
+                                                <th className="p-3">Previsão Término</th>
                                                 <th className="p-3 text-right">Início</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-[#570a8a]/50 text-sm">
                                             {allProduction.filter(p => p.status !== 'finished').length === 0 ? (
-                                                <tr><td colSpan={4} className="p-4 text-center text-gray-500">Nenhuma peça em produção no momento.</td></tr>
+                                                <tr><td colSpan={6} className="p-4 text-center text-gray-500">Nenhuma peça em produção no momento.</td></tr>
                                             ) : (
                                                 allProduction.filter(p => p.status !== 'finished').map((prod, i) => (
                                                     <tr key={i} className="hover:bg-[#2e0249]">
@@ -711,6 +966,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onChangeView }) => {
                                                         </td>
                                                         <td className="p-3 text-gray-300">{prod.employeeName}</td>
                                                         <td className="p-3 text-[#FFD700]">{prod.currentSector}</td>
+                                                        <td className="p-3 text-gray-300">{getProductByCode(prod.partCode)?.client || 'Nao encontrado'}</td>
+                                                        <td className="p-3">
+                                                            {getProductByCode(prod.partCode)?.deliveryDeadline ? (
+                                                                <span className={`text-xs px-2 py-1 rounded border ${Date.now() > new Date(`${getProductByCode(prod.partCode)?.deliveryDeadline}T23:59:59`).getTime() ? 'border-red-600 text-red-300 bg-red-900/20' : 'border-emerald-600 text-emerald-300 bg-emerald-900/20'}`}>
+                                                                    {new Date(getProductByCode(prod.partCode)!.deliveryDeadline!).toLocaleDateString('pt-BR')}
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-xs text-gray-500">Sem previsão</span>
+                                                            )}
+                                                        </td>
                                                         <td className="p-3 text-right text-gray-400 font-mono text-xs">
                                                             {new Date(prod.startTime).toLocaleTimeString()}
                                                         </td>

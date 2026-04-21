@@ -8,6 +8,13 @@ export const ProductForm: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [showClientModal, setShowClientModal] = useState(false);
+  const [editingProductId, setEditingProductId] = useState<number | null>(null);
+  const [editingProductData, setEditingProductData] = useState({
+    name: '',
+    client: '',
+    sector: 'Triagem',
+    deliveryDeadline: ''
+  });
   const [clientFormData, setClientFormData] = useState({
     name: '',
     doc: '',
@@ -20,7 +27,8 @@ export const ProductForm: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     client: '',
-    initialSector: 'Triagem'
+    initialSector: 'Triagem',
+    deliveryDeadline: ''
   });
 
   useEffect(() => {
@@ -103,8 +111,8 @@ export const ProductForm: React.FC = () => {
   };
 
   const handleSave = () => {
-    if (!formData.name || !formData.client || !formData.initialSector) {
-      alert("Erro: Todos os campos são obrigatórios (Nome do Produto, Cliente, Setor Inicial).");
+    if (!formData.name || !formData.client || !formData.initialSector || !formData.deliveryDeadline) {
+      alert("Erro: Todos os campos são obrigatórios (Nome do Produto, Cliente, Setor Inicial e Prazo de Entrega).");
       return;
     }
 
@@ -113,7 +121,8 @@ export const ProductForm: React.FC = () => {
       name: formData.name,
       code: generatedCode,
       client: formData.client,
-      sector: formData.initialSector
+      sector: formData.initialSector,
+      deliveryDeadline: formData.deliveryDeadline
     };
 
     // Save to Store
@@ -126,7 +135,8 @@ export const ProductForm: React.FC = () => {
     setFormData({
       name: '',
       client: '',
-      initialSector: 'Triagem'
+      initialSector: 'Triagem',
+      deliveryDeadline: ''
     });
     
     // Force generate new code for the next entry immediately
@@ -139,6 +149,13 @@ export const ProductForm: React.FC = () => {
   };
 
   const handleDelete = (id: number) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode excluir produtos.');
+      return;
+    }
+
     if (window.confirm("Tem certeza que deseja excluir este produto?")) {
       systemStore.removeProduct(id);
       setProducts([...systemStore.getProducts()]); // Refresh with new reference
@@ -146,6 +163,64 @@ export const ProductForm: React.FC = () => {
       setTimeout(generateNewCode, 50);
     }
   };
+
+  const handleStartEdit = (product: Product) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode editar produtos.');
+      return;
+    }
+
+    setEditingProductId(product.id);
+    setEditingProductData({
+      name: product.name,
+      client: product.client,
+      sector: product.sector,
+      deliveryDeadline: product.deliveryDeadline || ''
+    });
+  };
+
+  const handleEditingProductChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setEditingProductData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingProductId(null);
+  };
+
+  const handleUpdate = (productId: number) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode editar produtos.');
+      return;
+    }
+
+    if (!editingProductData.name || !editingProductData.client || !editingProductData.sector || !editingProductData.deliveryDeadline) {
+      alert('Erro: preencha nome, cliente, setor e prazo.');
+      return;
+    }
+
+    const original = products.find(p => p.id === productId);
+    if (!original) return;
+
+    systemStore.updateProduct({
+      ...original,
+      name: editingProductData.name,
+      client: editingProductData.client,
+      sector: editingProductData.sector,
+      deliveryDeadline: editingProductData.deliveryDeadline,
+    });
+
+    setProducts([...systemStore.getProducts()]);
+    setEditingProductId(null);
+    alert('Produto atualizado com sucesso!');
+  };
+
+  const currentUser = systemStore.getCurrentUser();
+  const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
 
   return (
     <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -222,6 +297,18 @@ export const ProductForm: React.FC = () => {
             />
             <p className="text-[10px] text-purple-300 mt-1 opacity-80">Padrão: Triagem</p>
           </div>
+
+          <div className="space-y-1">
+            <label className="block text-[#FFD700] font-bold text-base">Prazo de Entrega:</label>
+            <input
+              type="date"
+              name="deliveryDeadline"
+              value={formData.deliveryDeadline}
+              onChange={handleInputChange}
+              className="w-full bg-[#2e0249] border-none rounded-md p-3 text-white focus:ring-2 focus:ring-[#FFD700] focus:outline-none shadow-inner"
+            />
+            <p className="text-[10px] text-purple-300 mt-1 opacity-80">Usado para previsão e alerta de prazo estourado.</p>
+          </div>
         </div>
 
         <div className="pt-4">
@@ -248,33 +335,87 @@ export const ProductForm: React.FC = () => {
                   <th className="p-4 font-bold text-sm uppercase">ID Único</th>
                   <th className="p-4 font-bold text-sm uppercase">Setor Atual</th>
                   <th className="p-4 font-bold text-sm uppercase">Cliente</th>
+                  <th className="p-4 font-bold text-sm uppercase">Prazo</th>
                   <th className="p-4 font-bold text-sm uppercase text-center">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#570a8a]">
                 {products.map((product) => (
                   <tr key={product.id} className="hover:bg-[#3c0360] transition-colors">
-                    <td className="p-4 text-white font-medium">{product.name}</td>
+                    <td className="p-4 text-white font-medium">
+                      {editingProductId === product.id ? (
+                        <input name="name" value={editingProductData.name} onChange={handleEditingProductChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-white" />
+                      ) : product.name}
+                    </td>
                     <td className="p-4 text-purple-200 font-mono text-sm font-bold">{product.code}</td>
                     <td className="p-4">
-                      <span className="bg-purple-900 text-purple-200 px-2 py-1 rounded text-xs border border-purple-700">
-                        {product.sector}
-                      </span>
+                      {editingProductId === product.id ? (
+                        <select name="sector" value={editingProductData.sector} onChange={handleEditingProductChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-purple-200">
+                          <option value="Triagem">Triagem</option>
+                          <option value="CAD">CAD</option>
+                          <option value="CAM">CAM</option>
+                          <option value="Freezagem">Freezagem</option>
+                          <option value="Acabamento">Acabamento</option>
+                        </select>
+                      ) : (
+                        <span className="bg-purple-900 text-purple-200 px-2 py-1 rounded text-xs border border-purple-700">
+                          {product.sector}
+                        </span>
+                      )}
                     </td>
                     <td className="p-4 text-purple-200 text-sm flex items-center gap-2">
-                        <UserCircle className="w-3 h-3 opacity-70" />
-                        {product.client}
+                        {editingProductId === product.id ? (
+                          <select name="client" value={editingProductData.client} onChange={handleEditingProductChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-purple-200">
+                            <option value="">Selecione o cliente...</option>
+                            {clients.map(client => (
+                              <option key={client.id} value={client.name}>{client.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <>
+                            <UserCircle className="w-3 h-3 opacity-70" />
+                            {product.client}
+                          </>
+                        )}
+                    </td>
+                    <td className="p-4 text-sm">
+                      {editingProductId === product.id ? (
+                        <input name="deliveryDeadline" type="date" value={editingProductData.deliveryDeadline} onChange={handleEditingProductChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-purple-200" />
+                      ) : (
+                        product.deliveryDeadline ? (
+                          <span className={`px-2 py-1 rounded text-xs border ${new Date(product.deliveryDeadline).getTime() < new Date(new Date().toDateString()).getTime() ? 'bg-red-900/40 text-red-300 border-red-700' : 'bg-emerald-900/40 text-emerald-300 border-emerald-700'}`}>
+                            {new Date(product.deliveryDeadline).toLocaleDateString('pt-BR')}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 text-xs">Sem prazo</span>
+                        )
+                      )}
                     </td>
                     <td className="p-4 flex justify-center gap-3">
-                      <button className="text-blue-400 hover:text-blue-300 transition-colors">
-                        <Edit className="w-5 h-5" />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(product.id)}
-                        className="text-red-400 hover:text-red-300 transition-colors"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                      {editingProductId === product.id ? (
+                        <>
+                          <button onClick={() => handleUpdate(product.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
+                            <Save className="w-5 h-5" />
+                          </button>
+                          <button onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => handleStartEdit(product)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar produto' : 'Somente administrador pode editar'}>
+                            <Edit className="w-5 h-5" />
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(product.id)}
+                            disabled={!isAdmin}
+                            className={`transition-colors ${isAdmin ? 'text-red-400 hover:text-red-300' : 'text-gray-500 cursor-not-allowed'}`}
+                            title={isAdmin ? 'Excluir produto' : 'Somente administrador pode excluir'}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

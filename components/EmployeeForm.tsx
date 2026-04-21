@@ -11,6 +11,12 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [editingEmployeeId, setEditingEmployeeId] = useState<number | null>(null);
+  const [editingEmployeeData, setEditingEmployeeData] = useState({
+    name: '',
+    cpf: '',
+    sector: ''
+  });
 
   // Form State
   const [formData, setFormData] = useState({
@@ -145,10 +151,93 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
   };
 
   const handleDelete = (id: number) => {
-    // Instant Delete without confirm
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode excluir usuários.');
+      return;
+    }
+
+    const target = employees.find(e => e.id === id);
+    if (target?.username?.trim().toLowerCase() === 'admin') {
+      alert('O usuário administrador padrão não pode ser excluído.');
+      return;
+    }
+
+    if (!window.confirm('Tem certeza que deseja excluir este usuário?')) return;
+
     systemStore.removeEmployee(id);
     setEmployees([...systemStore.getEmployees()]); // Force state update
   };
+
+  const handleStartEdit = (emp: Employee) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode editar usuários.');
+      return;
+    }
+
+    setEditingEmployeeId(emp.id);
+    setEditingEmployeeData({
+      name: emp.name,
+      cpf: emp.cpf || '',
+      sector: emp.sector,
+    });
+  };
+
+  const handleEditingInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    const finalValue = name === 'cpf' ? formatCPF(value) : value;
+    setEditingEmployeeData(prev => ({ ...prev, [name]: finalValue }));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingEmployeeId(null);
+  };
+
+  const handleUpdate = (id: number) => {
+    const currentUser = systemStore.getCurrentUser();
+    const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
+    if (!isAdmin) {
+      alert('Somente o administrador pode editar usuários.');
+      return;
+    }
+
+    if (!editingEmployeeData.name || !editingEmployeeData.cpf || !editingEmployeeData.sector) {
+      alert('Erro: nome, CPF e setor são obrigatórios.');
+      return;
+    }
+
+    const duplicate = employees.some(emp =>
+      emp.id !== id && (
+        (emp.cpf || '').trim().toLowerCase() === editingEmployeeData.cpf.trim().toLowerCase() ||
+        emp.name.trim().toLowerCase() === editingEmployeeData.name.trim().toLowerCase()
+      )
+    );
+
+    if (duplicate) {
+      alert('Erro: já existe outro usuário com este nome ou CPF.');
+      return;
+    }
+
+    const original = employees.find(e => e.id === id);
+    if (!original) return;
+
+    systemStore.updateEmployee({
+      ...original,
+      name: editingEmployeeData.name.trim(),
+      cpf: editingEmployeeData.cpf.trim(),
+      sector: editingEmployeeData.sector,
+    });
+
+    setEmployees([...systemStore.getEmployees()]);
+    setEditingEmployeeId(null);
+    alert('Usuário atualizado com sucesso!');
+  };
+
+  const currentUser = systemStore.getCurrentUser();
+  const isAdmin = currentUser?.username?.trim().toLowerCase() === 'admin';
 
   return (
     <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -363,19 +452,52 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({ onBackToLogin }) => 
                             )}
                         </div>
                     </td>
-                    <td className="p-4 text-white font-medium">{emp.name}</td>
-                    <td className="p-4 text-purple-200">{emp.cpf}</td>
-                    <td className="p-4 text-purple-200">{emp.sector}</td>
+                    <td className="p-4 text-white font-medium">
+                      {editingEmployeeId === emp.id ? (
+                        <input name="name" value={editingEmployeeData.name} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-white" />
+                      ) : emp.name}
+                    </td>
+                    <td className="p-4 text-purple-200">
+                      {editingEmployeeId === emp.id ? (
+                        <input name="cpf" value={editingEmployeeData.cpf} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-purple-200" />
+                      ) : emp.cpf}
+                    </td>
+                    <td className="p-4 text-purple-200">
+                      {editingEmployeeId === emp.id ? (
+                        <select name="sector" value={editingEmployeeData.sector} onChange={handleEditingInputChange} className="w-full bg-[#1b002b] border border-[#570a8a] rounded px-2 py-1 text-sm text-purple-200">
+                          <option value="Triagem">Triagem</option>
+                          <option value="CAD">CAD</option>
+                          <option value="CAM">CAM</option>
+                          <option value="Freezagem">Freezagem</option>
+                          <option value="Acabamento">Acabamento</option>
+                        </select>
+                      ) : emp.sector}
+                    </td>
                     <td className="p-4 flex justify-center gap-3">
-                      <button className="text-blue-400 hover:text-blue-300 transition-colors">
-                        <Edit className="w-5 h-5" />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(emp.id)}
-                        className="text-red-400 hover:text-red-300 transition-colors"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                      {editingEmployeeId === emp.id ? (
+                        <>
+                          <button onClick={() => handleUpdate(emp.id)} className="text-emerald-400 hover:text-emerald-300 transition-colors" title="Salvar edição">
+                            <Save className="w-5 h-5" />
+                          </button>
+                          <button onClick={handleCancelEdit} className="text-gray-300 hover:text-white transition-colors" title="Cancelar edição">
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => handleStartEdit(emp)} disabled={!isAdmin} className={`transition-colors ${isAdmin ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 cursor-not-allowed'}`} title={isAdmin ? 'Editar usuário' : 'Somente administrador pode editar'}>
+                            <Edit className="w-5 h-5" />
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(emp.id)}
+                            disabled={!isAdmin || emp.username?.trim().toLowerCase() === 'admin'}
+                            className={`transition-colors ${isAdmin && emp.username?.trim().toLowerCase() !== 'admin' ? 'text-red-400 hover:text-red-300' : 'text-gray-500 cursor-not-allowed'}`}
+                            title={emp.username?.trim().toLowerCase() === 'admin' ? 'Administrador padrão não pode ser excluído' : isAdmin ? 'Excluir usuário' : 'Somente administrador pode excluir'}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

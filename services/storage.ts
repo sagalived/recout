@@ -5,6 +5,7 @@ export interface Product {
   code: string;
   client: string;
   sector: string;
+  deliveryDeadline?: string;
 }
 
 export interface Employee {
@@ -244,6 +245,8 @@ class SystemStore {
           const code = String(baseCode + i);
           const name = `Peca Teste ${i + 1}`;
           const client = this.clients[i % this.clients.length]?.name || 'Cliente Alpha';
+          const deadline = new Date();
+          deadline.setDate(deadline.getDate() + 7 + i);
           const exists = this.products.some(p => p.code === code || p.name === name);
           if (!exists) {
             this.products.push({
@@ -251,7 +254,8 @@ class SystemStore {
               name,
               code,
               client,
-              sector: triagem
+              sector: triagem,
+              deliveryDeadline: deadline.toISOString().slice(0, 10)
             });
             shouldPersistMigration = true;
           }
@@ -368,6 +372,11 @@ class SystemStore {
     this.products.push(p); 
     this.saveToStorage(); 
   }
+  updateProduct(updated: Product) {
+    this.loadFromStorage();
+    this.products = this.products.map(p => p.id === updated.id ? updated : p);
+    this.saveToStorage();
+  }
   removeProduct(id: number) { 
     this.loadFromStorage();
     this.products = this.products.filter(p => p.id !== id); 
@@ -381,9 +390,20 @@ class SystemStore {
     this.employees.push(e); 
     this.saveToStorage();
   }
+  updateEmployee(updated: Employee) {
+    this.loadFromStorage();
+    this.employees = this.employees.map(e => e.id === updated.id ? updated : e);
+    if (this.currentUser?.id === updated.id) {
+      this.currentUser = updated;
+    }
+    this.saveToStorage();
+  }
   removeEmployee(id: number) { 
     this.loadFromStorage();
     this.employees = this.employees.filter(e => e.id !== id); 
+    if (this.currentUser?.id === id) {
+      this.currentUser = null;
+    }
     this.saveToStorage();
   }
 
@@ -392,6 +412,11 @@ class SystemStore {
   addClient(c: Client) { 
     this.loadFromStorage();
     this.clients.push(c); 
+    this.saveToStorage();
+  }
+  updateClient(updated: Client) {
+    this.loadFromStorage();
+    this.clients = this.clients.map(c => c.id === updated.id ? updated : c);
     this.saveToStorage();
   }
   removeClient(id: number) { 
