@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Factory, Play, CheckCircle, RotateCcw, X, Box, Search, PlusCircle, Upload, ImageIcon, Film, Cuboid, ChevronDown, ChevronRight } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { systemStore, Product, ProductionEntry, ProductionSession, PartMediaAsset } from '../services/storage';
@@ -109,8 +110,40 @@ export const ProductionView: React.FC = () => {
     return fileName.endsWith('.obj') || fileType.includes('obj');
   };
 
+  const isMtlAsset = (asset: PartMediaAsset) => {
+    const fileName = asset.fileName.toLowerCase();
+    const fileType = asset.fileType.toLowerCase();
+    return fileName.endsWith('.mtl') || fileType.includes('mtl');
+  };
+
   const isViewableModelAsset = (asset: PartMediaAsset) => {
     return isStlAsset(asset) || isObjAsset(asset);
+  };
+
+  const getAssetTextContent = async (asset: PartMediaAsset) => {
+    if (asset.contentFormat === 'text' && asset.textContent) {
+      return asset.textContent;
+    }
+
+    if (!asset.dataUrl) return '';
+    const response = await fetch(asset.dataUrl);
+    const buffer = await response.arrayBuffer();
+
+    try {
+      return new TextDecoder('utf-8').decode(buffer);
+    } catch {
+      return new TextDecoder('iso-8859-1').decode(buffer);
+    }
+  };
+
+  const findMtlForObj = (objAsset: PartMediaAsset): PartMediaAsset | null => {
+    const objBaseName = objAsset.fileName.replace(/\.[^.]+$/, '').toLowerCase();
+    const mtlCandidates = mediaAssets.filter(asset => isMtlAsset(asset));
+
+    const exact = mtlCandidates.find(asset => asset.fileName.replace(/\.[^.]+$/, '').toLowerCase() === objBaseName);
+    if (exact) return exact;
+
+    return mtlCandidates.length > 0 ? mtlCandidates[0] : null;
   };
 
   const downloadModelAsset = (asset: PartMediaAsset) => {
@@ -159,6 +192,7 @@ export const ProductionView: React.FC = () => {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.setSize(width, height);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -170,15 +204,17 @@ export const ProductionView: React.FC = () => {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
     directionalLight.position.set(60, 80, 80);
+    const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.45);
     scene.add(ambientLight);
     scene.add(directionalLight);
+    scene.add(hemisphereLight);
 
     const grid = new THREE.GridHelper(200, 20, 0x334155, 0x1e293b);
     grid.rotation.x = Math.PI / 2;
     scene.add(grid);
 
     let animationFrame = 0;
-    const disposables: Array<THREE.BufferGeometry | THREE.Material> = [];
+    const disposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = [];
 
     const animate = () => {
       animationFrame = window.requestAnimationFrame(animate);
@@ -206,6 +242,44 @@ export const ProductionView: React.FC = () => {
       controls.update();
     };
 
+    const normalizeFileName = (value: string) => value.replace(/\\/g, '/').split('/').pop()?.trim().toLowerCase() || value.trim().toLowerCase();
+
+    const parseMtlMetadata = (mtlText: string) => {
+      const metadata: Record<string, { mapKd?: string; kd?: THREE.Color }> = {};
+      let current = '';
+
+      mtlText.split(/\r?\n/).forEach(rawLine => {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) return;
+
+        if (line.toLowerCase().startsWith('newmtl ')) {
+          current = line.slice(7).trim();
+          if (current && !metadata[current]) {
+            metadata[current] = {};
+          }
+          return;
+        }
+
+        if (!current) return;
+
+        if (line.toLowerCase().startsWith('map_kd ')) {
+          metadata[current].mapKd = line.slice(7).trim();
+          return;
+        }
+
+        if (line.toLowerCase().startsWith('kd ')) {
+          const parts = line.slice(3).trim().split(/\s+/).map(Number);
+          if (parts.length >= 3) {
+            const [rRaw, gRaw, bRaw] = parts;
+            const scale = Math.max(rRaw, gRaw, bRaw) > 1 ? 255 : 1;
+            metadata[current].kd = new THREE.Color(rRaw / scale, gRaw / scale, bRaw / scale);
+          }
+        }
+      });
+
+      return metadata;
+    };
+
     const loadModel = async () => {
       try {
         if (isStlAsset(selectedModelAsset)) {
@@ -229,19 +303,22 @@ export const ProductionView: React.FC = () => {
           frameModel(mesh);
         } else {
           const objLoader = new OBJLoader();
-          let objText = selectedModelAsset.contentFormat === 'text' ? (selectedModelAsset.textContent || '') : '';
+          const objText = await getAssetTextContent(selectedModelAsset);
 
-          if (!objText) {
-            const response = await fetch(selectedModelAsset.dataUrl);
-            const buffer = await response.arrayBuffer();
-            try {
-              objText = new TextDecoder('utf-8').decode(buffer);
-            } catch {
-              objText = '';
-            }
+          if (!objText.trim()) {
+            throw new Error('OBJ vazio ou inválido.');
+          }
 
-            if (!objText) {
-              objText = new TextDecoder('iso-8859-1').decode(buffer);
+          let mtlMetadata: Record<string, { mapKd?: string; kd?: THREE.Color }> = {};
+          const mtlAsset = findMtlForObj(selectedModelAsset);
+          if (mtlAsset) {
+            const mtlText = await getAssetTextContent(mtlAsset);
+            if (mtlText.trim()) {
+              mtlMetadata = parseMtlMetadata(mtlText);
+              const mtlLoader = new MTLLoader();
+              const materials = mtlLoader.parse(mtlText, '');
+              materials.preload();
+              objLoader.setMaterials(materials);
             }
           }
 
@@ -250,21 +327,58 @@ export const ProductionView: React.FC = () => {
           object.traverse((node) => {
             if ((node as THREE.Mesh).isMesh) {
               const mesh = node as THREE.Mesh;
-              if (!mesh.material) {
-                mesh.material = new THREE.MeshStandardMaterial({
-                  color: 0x38bdf8,
-                  metalness: 0.15,
-                  roughness: 0.55,
-                });
-              }
+              const hasVertexColors = Boolean((mesh.geometry as THREE.BufferGeometry).getAttribute('color'));
+
               if (mesh.geometry) {
+                const colorAttr = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+                if (colorAttr) {
+                  let maxColor = 0;
+                  for (let i = 0; i < colorAttr.count; i++) {
+                    maxColor = Math.max(maxColor, colorAttr.getX(i), colorAttr.getY(i), colorAttr.getZ(i));
+                  }
+                  if (maxColor > 1) {
+                    for (let i = 0; i < colorAttr.count; i++) {
+                      colorAttr.setXYZ(i, colorAttr.getX(i) / 255, colorAttr.getY(i) / 255, colorAttr.getZ(i) / 255);
+                    }
+                    colorAttr.needsUpdate = true;
+                  }
+                }
                 mesh.geometry.computeVertexNormals();
                 disposables.push(mesh.geometry);
               }
-              if (Array.isArray(mesh.material)) {
-                mesh.material.forEach(material => disposables.push(material));
-              } else if (mesh.material) {
-                disposables.push(mesh.material);
+
+              const materialName = (Array.isArray(mesh.material) ? mesh.material[0]?.name : mesh.material?.name) || '';
+              const selectedMeta = mtlMetadata[materialName] || undefined;
+
+              if (hasVertexColors) {
+                const colorMaterial = new THREE.MeshBasicMaterial({
+                  color: 0xffffff,
+                  vertexColors: true,
+                  side: THREE.DoubleSide,
+                });
+                mesh.material = colorMaterial;
+                disposables.push(colorMaterial);
+              } else {
+                let mapTexture: THREE.Texture | undefined;
+                if (selectedMeta?.mapKd) {
+                  const textureName = normalizeFileName(selectedMeta.mapKd);
+                  const textureAsset = mediaAssets.find(asset => normalizeFileName(asset.fileName) === textureName && !!asset.dataUrl);
+                  if (textureAsset?.dataUrl) {
+                    const textureLoader = new THREE.TextureLoader();
+                    mapTexture = textureLoader.load(textureAsset.dataUrl);
+                    mapTexture.colorSpace = THREE.SRGBColorSpace;
+                    disposables.push(mapTexture);
+                  }
+                }
+
+                const phong = new THREE.MeshPhongMaterial({
+                  color: selectedMeta?.kd || new THREE.Color(0xd1d5db),
+                  map: mapTexture,
+                  side: THREE.DoubleSide,
+                  shininess: 20,
+                });
+                mesh.material = phong;
+                disposables.push(phong);
               }
             }
           });
@@ -506,68 +620,125 @@ export const ProductionView: React.FC = () => {
     setShowPartModal(false);
   };
 
+  const compressImageDataUrl = (sourceDataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 1600;
+        const ratio = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const targetW = Math.max(1, Math.floor(img.width * ratio));
+        const targetH = Math.max(1, Math.floor(img.height * ratio));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(sourceDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/jpeg', 0.78));
+      };
+      img.onerror = () => resolve(sourceDataUrl);
+      img.src = sourceDataUrl;
+    });
+  };
+
   const handleUploadFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (files.length === 0 || !partId) return;
 
     let pending = files.length;
+    let successCount = 0;
+    let failedCount = 0;
 
     const finishOne = () => {
       pending -= 1;
       if (pending === 0) {
         refreshPartMedia(partId);
-        alert(`${files.length} arquivo(s) enviado(s) para o setor ${currentSector}.`);
+        if (failedCount === 0) {
+          alert(`${successCount} arquivo(s) enviado(s) para o setor ${currentSector}.`);
+        } else {
+          alert(`${successCount} arquivo(s) enviado(s) e ${failedCount} falhou/falharam. Se o erro persistir, reduza o tamanho da imagem/OBJ.`);
+        }
       }
     };
 
     files.forEach((file) => {
-      const isObjFile = file.name.toLowerCase().endsWith('.obj') || file.type.toLowerCase().includes('obj');
+      const lowerName = file.name.toLowerCase();
+      const lowerType = file.type.toLowerCase();
+      const isObjFile = lowerName.endsWith('.obj') || lowerType.includes('obj');
+      const isMtlFile = lowerName.endsWith('.mtl') || lowerType.includes('mtl');
+      const isText3DFile = isObjFile || isMtlFile;
       const reader = new FileReader();
       reader.onerror = () => {
         alert(`Falha ao ler o arquivo: ${file.name}`);
+        failedCount += 1;
         finishOne();
       };
 
-      if (isObjFile) {
+      if (isText3DFile) {
         reader.onload = () => {
           const textContent = String(reader.result || '');
-          if (!textContent) {
-            alert(`Falha ao processar OBJ: ${file.name}`);
+          if (!textContent.trim()) {
+            alert(`Falha ao processar arquivo 3D de texto: ${file.name}`);
             finishOne();
             return;
           }
 
-          systemStore.addPartMedia({
+          const saved = systemStore.addPartMedia({
             partCode: partId,
             processId: processId || undefined,
             sector: currentSector || undefined,
             uploadedBy: employeeName || undefined,
             fileName: file.name,
-            fileType: file.type || 'text/plain',
+            fileType: file.type || (isMtlFile ? 'text/mtl' : 'text/plain'),
             dataUrl: '',
             contentFormat: 'text',
             textContent,
           });
+
+          if (saved) successCount += 1;
+          else failedCount += 1;
 
           finishOne();
         };
         reader.readAsText(file);
       } else {
         reader.onload = () => {
-          const dataUrl = String(reader.result || '');
-          if (dataUrl) {
-            systemStore.addPartMedia({
+          const rawDataUrl = String(reader.result || '');
+          if (!rawDataUrl) {
+            failedCount += 1;
+            finishOne();
+            return;
+          }
+
+          const isImageFile = file.type.toLowerCase().startsWith('image/');
+          const shouldCompress = isImageFile && file.size > 900 * 1024;
+
+          const persist = (dataUrlToSave: string) => {
+            const saved = systemStore.addPartMedia({
               partCode: partId,
               processId: processId || undefined,
               sector: currentSector || undefined,
               uploadedBy: employeeName || undefined,
               fileName: file.name,
               fileType: file.type || 'application/octet-stream',
-              dataUrl,
+              dataUrl: dataUrlToSave,
               contentFormat: 'dataUrl',
             });
+            if (saved) successCount += 1;
+            else failedCount += 1;
+            finishOne();
+          };
+
+          if (shouldCompress) {
+            void compressImageDataUrl(rawDataUrl).then((compressed) => {
+              persist(compressed);
+            });
+          } else {
+            persist(rawDataUrl);
           }
-          finishOne();
         };
         reader.readAsDataURL(file);
       }
@@ -908,7 +1079,7 @@ export const ProductionView: React.FC = () => {
                             onChange={handleUploadFile}
                             disabled={!partId}
                             multiple
-                            accept="image/*,video/*,.stl,.obj,.3mf,.step,.stp,.iges,.igs,model/*"
+                            accept="image/*,video/*,.stl,.obj,.mtl,.3mf,.step,.stp,.iges,.igs,model/*"
                           />
                         </label>
                      </div>
@@ -937,7 +1108,7 @@ export const ProductionView: React.FC = () => {
                               onChange={handleUploadFile}
                               disabled={!partId}
                               multiple
-                              accept="image/*,video/*,.stl,.obj,.3mf,.step,.stp,model/*,.iges,.igs"
+                              accept="image/*,video/*,.stl,.obj,.mtl,.3mf,.step,.stp,model/*,.iges,.igs"
                             />
                           </label>
                       </div>

@@ -305,7 +305,7 @@ class SystemStore {
     }
   }
 
-  private saveToStorage() {
+  private saveToStorage(): boolean {
     try {
       this.updatedAt = Date.now();
       const data: PersistedSystemState = {
@@ -326,8 +326,27 @@ class SystemStore {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state: data }),
       }).catch(() => { /* offline — localStorage já salvo */ });
+      return true;
     } catch (e) {
       console.error("Erro ao salvar dados:", e);
+      // Fallback: mantém em memória e tenta sincronizar com o banco remoto.
+      const data: PersistedSystemState = {
+        employees: this.employees,
+        products: this.products,
+        clients: this.clients,
+        production: this.production,
+        deliveryAlerts: this.deliveryAlerts,
+        partMedia: this.partMedia,
+        sectors: this.sectors,
+        currentUser: this.currentUser,
+        updatedAt: this.updatedAt,
+      };
+      void fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: data }),
+      }).catch(() => { /* sem rede: mantém somente em memória nesta sessão */ });
+      return false;
     }
   }
 
@@ -544,20 +563,21 @@ class SystemStore {
   }
 
   getPartMedia(partCode: string) {
-    this.loadFromStorage();
+    // Evita recarregar do storage aqui para não perder upload recém-feito
+    // quando o localStorage atinge limite e a sessão segue apenas em memória.
     return this.partMedia
       .filter(m => m.partCode === partCode)
       .sort((a, b) => b.uploadedAt - a.uploadedAt);
   }
 
-  addPartMedia(asset: Omit<PartMediaAsset, 'id' | 'uploadedAt'>) {
+  addPartMedia(asset: Omit<PartMediaAsset, 'id' | 'uploadedAt'>): boolean {
     this.loadFromStorage();
     this.partMedia.push({
       id: `media-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       uploadedAt: Date.now(),
       ...asset,
     });
-    this.saveToStorage();
+    return this.saveToStorage();
   }
 
   removePartMedia(mediaId: string) {
