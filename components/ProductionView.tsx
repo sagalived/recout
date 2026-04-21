@@ -263,7 +263,11 @@ export const ProductionView: React.FC = () => {
         if (!current) return;
 
         if (line.toLowerCase().startsWith('map_kd ')) {
-          metadata[current].mapKd = line.slice(7).trim();
+          const rawMap = line.slice(7).trim();
+          // map_Kd pode vir com parametros, ex: "map_Kd -s 1 1 1 texture.jpg"
+          const parts = rawMap.match(/(?:[^\s"]+|"[^"]*")+/g) || [rawMap];
+          const fileToken = parts[parts.length - 1] || rawMap;
+          metadata[current].mapKd = fileToken.replace(/^"|"$/g, '');
           return;
         }
 
@@ -347,22 +351,63 @@ export const ProductionView: React.FC = () => {
                 disposables.push(mesh.geometry);
               }
 
-              const materialName = (Array.isArray(mesh.material) ? mesh.material[0]?.name : mesh.material?.name) || '';
-              const selectedMeta = mtlMetadata[materialName] || undefined;
+              const resolveMeta = (name?: string) => {
+                if (!name) return undefined;
+                if (mtlMetadata[name]) return mtlMetadata[name];
+                const key = Object.keys(mtlMetadata).find(k => k.trim().toLowerCase() === name.trim().toLowerCase());
+                return key ? mtlMetadata[key] : undefined;
+              };
 
-              if (hasVertexColors) {
-                const colorMaterial = new THREE.MeshBasicMaterial({
-                  color: 0xffffff,
-                  vertexColors: true,
-                  side: THREE.DoubleSide,
-                });
-                mesh.material = colorMaterial;
-                disposables.push(colorMaterial);
-              } else {
+              const resolveMetaFallback = (name?: string) => {
+                const direct = resolveMeta(name);
+                if (direct) return direct;
+                const entries = Object.values(mtlMetadata);
+                if (entries.length === 1) return entries[0];
+                return undefined;
+              };
+
+              const getMeaningfulVertexColors = () => {
+                if (!mesh.geometry) return false;
+                const colorAttr = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+                if (!colorAttr || colorAttr.count === 0) return false;
+
+                let minR = 1, minG = 1, minB = 1;
+                let maxR = 0, maxG = 0, maxB = 0;
+
+                for (let i = 0; i < colorAttr.count; i++) {
+                  const r = colorAttr.getX(i);
+                  const g = colorAttr.getY(i);
+                  const b = colorAttr.getZ(i);
+                  minR = Math.min(minR, r); minG = Math.min(minG, g); minB = Math.min(minB, b);
+                  maxR = Math.max(maxR, r); maxG = Math.max(maxG, g); maxB = Math.max(maxB, b);
+                }
+
+                const variation = (maxR - minR) + (maxG - minG) + (maxB - minB);
+                const nearPureWhite = minR > 0.97 && minG > 0.97 && minB > 0.97;
+                return variation > 0.03 || !nearPureWhite;
+              };
+
+              const buildMaterial = (legacyMaterial?: THREE.Material) => {
+                const legacyName = (legacyMaterial as THREE.Material | undefined)?.name || '';
+                const selectedMeta = resolveMetaFallback(legacyName);
+
+                const findTextureAsset = (mapPath: string) => {
+                  const textureName = normalizeFileName(mapPath);
+                  const textureBase = textureName.replace(/\.[^.]+$/, '');
+                  const exact = mediaAssets.find(asset => normalizeFileName(asset.fileName) === textureName && !!asset.dataUrl);
+                  if (exact) return exact;
+
+                  const byBase = mediaAssets.find(asset => {
+                    if (!asset.dataUrl) return false;
+                    const name = normalizeFileName(asset.fileName);
+                    return name === textureBase || name.replace(/\.[^.]+$/, '') === textureBase;
+                  });
+                  return byBase;
+                };
+
                 let mapTexture: THREE.Texture | undefined;
                 if (selectedMeta?.mapKd) {
-                  const textureName = normalizeFileName(selectedMeta.mapKd);
-                  const textureAsset = mediaAssets.find(asset => normalizeFileName(asset.fileName) === textureName && !!asset.dataUrl);
+                  const textureAsset = findTextureAsset(selectedMeta.mapKd);
                   if (textureAsset?.dataUrl) {
                     const textureLoader = new THREE.TextureLoader();
                     mapTexture = textureLoader.load(textureAsset.dataUrl);
@@ -371,14 +416,57 @@ export const ProductionView: React.FC = () => {
                   }
                 }
 
+                const legacyAny = legacyMaterial as THREE.MeshPhongMaterial | THREE.MeshStandardMaterial | THREE.MeshLambertMaterial | undefined;
+                const legacyColor = legacyAny?.color;
+                const legacyMap = legacyAny?.map;
+                const candidateKds = Object.values(mtlMetadata).map(meta => meta.kd).filter(Boolean) as THREE.Color[];
+                const fallbackKd = candidateKds.find(c => c.r < 0.95 || c.g < 0.95 || c.b < 0.95);
+                const baseColor = selectedMeta?.kd || legacyColor || fallbackKd || new THREE.Color(0xd1d5db);
+
+                const hasUsefulLegacyMap = Boolean(legacyMap);
+                const hasUsefulLegacyColor = Boolean(legacyColor && (legacyColor.r < 0.98 || legacyColor.g < 0.98 || legacyColor.b < 0.98));
+
+                if (legacyAny && (hasUsefulLegacyMap || hasUsefulLegacyColor)) {
+                  if (mapTexture) {
+                    legacyAny.map = mapTexture;
+                    legacyAny.needsUpdate = true;
+                  }
+                  if (!hasUsefulLegacyColor && selectedMeta?.kd && 'color' in legacyAny && legacyAny.color) {
+                    legacyAny.color = selectedMeta.kd.clone();
+                    legacyAny.needsUpdate = true;
+                  }
+                  disposables.push(legacyAny as THREE.Material);
+                  return legacyAny as THREE.Material;
+                }
+
                 const phong = new THREE.MeshPhongMaterial({
-                  color: selectedMeta?.kd || new THREE.Color(0xd1d5db),
-                  map: mapTexture,
+                  color: baseColor,
+                  map: mapTexture || legacyMap || null,
                   side: THREE.DoubleSide,
                   shininess: 20,
                 });
-                mesh.material = phong;
                 disposables.push(phong);
+                return phong;
+              };
+
+              const useVertexColors = hasVertexColors && getMeaningfulVertexColors();
+
+              if (useVertexColors) {
+                const colorMaterial = new THREE.MeshStandardMaterial({
+                  color: 0xffffff,
+                  vertexColors: true,
+                  side: THREE.DoubleSide,
+                  roughness: 0.65,
+                  metalness: 0.1,
+                });
+                mesh.material = colorMaterial;
+                disposables.push(colorMaterial);
+              } else {
+                if (Array.isArray(mesh.material)) {
+                  mesh.material = mesh.material.map(material => buildMaterial(material));
+                } else {
+                  mesh.material = buildMaterial(mesh.material as THREE.Material);
+                }
               }
             }
           });
