@@ -1,13 +1,21 @@
-import { sql } from '@vercel/postgres';
+import { Pool } from 'pg';
+
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
+if (!connectionString) {
+  console.error('DATABASE_URL/POSTGRES_URL ausente no ambiente.');
+}
+
+const pool = new Pool({ connectionString });
 
 async function ensureTable() {
-  await sql`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS recout_state (
       id INTEGER PRIMARY KEY,
       state JSONB NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `;
+  `);
 }
 
 export default async function handler(req: any, res: any) {
@@ -15,7 +23,7 @@ export default async function handler(req: any, res: any) {
     await ensureTable();
 
     if (req.method === 'GET') {
-      const result = await sql`SELECT state, updated_at FROM recout_state WHERE id = 1`;
+      const result = await pool.query('SELECT state, updated_at FROM recout_state WHERE id = 1');
       if (result.rowCount === 0) {
         return res.status(200).json({ state: null });
       }
@@ -34,12 +42,15 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ error: 'Payload invalido. Informe { state }.' });
       }
 
-      await sql`
+      await pool.query(
+        `
         INSERT INTO recout_state (id, state, updated_at)
-        VALUES (1, ${state}, NOW())
+        VALUES (1, $1::jsonb, NOW())
         ON CONFLICT (id)
         DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()
-      `;
+      `,
+        [JSON.stringify(state)]
+      );
 
       return res.status(200).json({ ok: true });
     }
